@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && { [ -d .venv ] || { python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt; }; } && [ -n \"$CLAUDE_ENV_FILE\" ] && echo \"source \\\"$CLAUDE_PROJECT_DIR/.venv/bin/activate\\\"\" >> \"$CLAUDE_ENV_FILE\""
+          }
+        ]
+      }
+    ]
+  }
+}

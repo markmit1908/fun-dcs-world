@@ -1,0 +1,13 @@
+{
+  "_comment": "Per-terrain replacements for broken pydcs Terrain.bounds, in DCS Cartesian metres (x = north/south, y = east/west). Keys match Terrain.name. Keys starting with '_' are ignored.",
+  "Falklands": {
+    "x_min": -375000, "x_max": 380000,
+    "y_min": -1050000, "y_max": 145000,
+    "source": "Estimate: pydcs copies TheChannel's bounds verbatim. Replaced with the extent of the 26 pydcs airfields plus ~50 km margin."
+  },
+  "MarianaIslands": {
+    "x_min": -55000, "x_max": 565000,
+    "y_min": -70000, "y_max": 160000,
+    "source": "Estimate: pydcs top bound is 10,000,000 m (typo). Replaced with the extent of the 8 pydcs airfields plus ~50 km margin."
+  }
+}

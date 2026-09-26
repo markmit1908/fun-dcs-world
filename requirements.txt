@@ -1,0 +1,3 @@
+pyproj==3.6.1
+pydcs @ git+https://github.com/dcs-retribution/pydcs.git@retribution
+pytest
