@@ -26,8 +26,11 @@ Install:
 Run:
     python3 channel_drone_gunnery.py
 
-Output:
-    channel_drone_gunnery.miz
+Output (same player start in each; see VARIANTS):
+    channel_drone_gunnery.miz         all three bands
+    channel_drone_gunnery_low.miz     low band only
+    channel_drone_gunnery_medium.miz  medium band only
+    channel_drone_gunnery_high.miz    high band only
 """
 
 from __future__ import annotations
@@ -55,7 +58,7 @@ except ImportError as exc:
     ) from exc
 
 
-OUTPUT = Path(__file__).resolve().parent / "channel_drone_gunnery.miz"
+OUTPUT_DIR = Path(__file__).resolve().parent
 
 # ---------------------------------------------------------------------------
 # Geographic setup
@@ -74,6 +77,21 @@ PLAYER_OFFSET_M = 2.0 * 1609.344  # 2 statute miles due south
 LOW_FT = 5_000
 MED_FT = 12_000
 HIGH_FT = 20_000
+
+BANDS = {
+    "LOW": LOW_FT,
+    "MEDIUM": MED_FT,
+    "HIGH": HIGH_FT,
+}
+
+# Output file name -> target bands in that mission. The player start is the
+# same in every variant.
+VARIANTS = {
+    "channel_drone_gunnery.miz": ["LOW", "MEDIUM", "HIGH"],
+    "channel_drone_gunnery_low.miz": ["LOW"],
+    "channel_drone_gunnery_medium.miz": ["MEDIUM"],
+    "channel_drone_gunnery_high.miz": ["HIGH"],
+}
 
 # Target speed. Kept moderate so a Spitfire can work the formations.
 TARGET_SPEED_KMH = 360
@@ -260,6 +278,9 @@ def create_target_band(
         group_size=2,
     )
     make_drone(fighters)
+    # Use the type's own radio frequency instead of the pydcs 251 MHz default
+    # (see create_player).
+    fighters.set_frequency(fighter_type.radio_frequency)
 
     # Replace any default tasking on the first waypoint only with passive
     # options + Follow. We preserve the WeaponHold/NoReaction tasks added above.
@@ -302,6 +323,10 @@ def create_player(
     )
 
     player.units[0].set_player()
+    # pydcs defaults every group to 251 MHz, which the Spitfire's radio can't
+    # tune, so DCS rejects the mission. Set this after set_player() so the
+    # channel 1 preset matches too.
+    player.set_frequency(player_type.radio_frequency)
 
     # First navigation point takes the player toward the target lane.
     player.add_waypoint(
@@ -322,27 +347,25 @@ def main():
     fighter = find_plane(*FIGHTER_IDS)
     bomber = find_plane(*BOMBER_IDS)
 
-    with quiet_dcs_install_lookup():
-        build_and_save(spitfire, fighter, bomber)
+    for filename, band_names in VARIANTS.items():
+        output = OUTPUT_DIR / filename
+        with quiet_dcs_install_lookup():
+            build_and_save(spitfire, fighter, bomber, band_names, output)
+        bands = ", ".join(f"{name} {BANDS[name]:,} ft" for name in band_names)
+        print(f"Wrote {output} ({bands})")
 
-    print(f"Wrote {OUTPUT}")
     print()
     print("Aircraft selected:")
     print(f"  Player : {spitfire.id}")
     print(f"  Fighter: {fighter.id}")
     print(f"  Bomber : {bomber.id}")
     print()
-    print("Target bands:")
-    print(f"  Low    : {LOW_FT:,} ft")
-    print(f"  Medium : {MED_FT:,} ft")
-    print(f"  High   : {HIGH_FT:,} ft")
-    print()
     print(f"Racetrack start: {START_LAT:.8f}, {START_LON:.8f}")
     print(f"Racetrack end  : {END_LAT:.8f}, {END_LON:.8f}")
     print("Player starts approximately 2 statute miles south of racetrack start.")
 
 
-def build_and_save(spitfire, fighter, bomber):
+def build_and_save(spitfire, fighter, bomber, band_names, output: Path):
     terrain = TheChannel()
     mission = dcs.Mission(terrain)
 
@@ -377,12 +400,24 @@ def build_and_save(spitfire, fighter, bomber):
 
     # Mission metadata.
     mission.start_time = datetime(1944, 6, 15, 12, 0, 0)
-    mission.set_sortie_text("Channel Drone Gunnery")
+    if len(band_names) == len(BANDS):
+        mission.set_sortie_text("Channel Drone Gunnery")
+    else:
+        levels = " / ".join(name.title() for name in band_names)
+        mission.set_sortie_text(f"Channel Drone Gunnery ({levels})")
+
+    altitudes = [f"{BANDS[name]:,} ft" for name in band_names]
+    if len(altitudes) == 1:
+        formations = f"One German target formation flies a racetrack pattern at {altitudes[0]}.\n"
+    else:
+        formations = (
+            f"{len(altitudes)} German target formations fly racetrack patterns at "
+            f"{', '.join(altitudes[:-1])} and {altitudes[-1]}.\n"
+        )
     mission.set_description_text(
         "Air-to-air gunnery practice over The Channel.\n\n"
-        "Three German target formations fly racetrack patterns at "
-        "5,000 ft, 12,000 ft and 20,000 ft.\n"
-        "Each formation consists of two Bf 109 fighters following one Ju 88 bomber.\n"
+        + formations
+        + "Each formation consists of two Bf 109 fighters following one Ju 88 bomber.\n"
         "Targets are set to Weapon Hold and No Reaction to Threat."
     )
     mission.set_description_bluetask_text(
@@ -395,27 +430,21 @@ def build_and_save(spitfire, fighter, bomber):
     # Player.
     create_player(mission, uk, spitfire, player_point, start)
 
-    # Three target altitude bands.
-    bands = [
-        ("LOW", LOW_FT),
-        ("MEDIUM", MED_FT),
-        ("HIGH", HIGH_FT),
-    ]
-
-    for name, altitude_ft in bands:
+    # Target altitude bands for this variant.
+    for name in band_names:
         create_target_band(
             mission,
             germany,
             bomber,
             fighter,
             name,
-            altitude_ft,
+            BANDS[name],
             start,
             end,
         )
 
     # Save.
-    mission.save(str(OUTPUT))
+    mission.save(str(output))
 
 
 if __name__ == "__main__":
