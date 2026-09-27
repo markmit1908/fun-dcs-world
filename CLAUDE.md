@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Two independent pydcs scripts:
+Two independent pydcs scripts, plus a reusable module:
 
 - `dcs_maps_to_kmz.py` exports every DCS World terrain known to pydcs as a KMZ for Google Earth (visual reference, not mission planning). Layers: each terrain's DCS Cartesian origin (0,0), its bounds rectangle, curated high-detail polygons, and pydcs airfields.
 - `channel_drone_gunnery.py` generates `channel_drone_gunnery.miz`, a WWII gunnery-practice mission on The Channel: a player Spitfire LF Mk IX plus three passive German formations (1 Ju-88 leading 2 Bf-109s) flying racetracks at 5k/12k/20k ft. It also writes `_low`/`_medium`/`_high` variants with a single formation each (`VARIANTS`).
+- `loss_tracker/` is a mission-generator-agnostic module. `add_loss_tracker(mission, LossTrackerConfig(...))` embeds `loss_tracker.lua`, which credits an enemy aircraft loss (kill, crash, ejection, landing away from an allied base) to the last player-coalition attacker, announces it, and sets `end_flag` when every enemy aircraft is gone (an `EndMission` trigger watches the flag).
 
 ## Commands
 
@@ -50,4 +51,14 @@ python -m pytest -q tests/test_kmz.py::test_detail_regions_inside_terrain
 - Targets are passive: Weapon Hold and No Reaction options go on waypoint 0 *before* the Orbit/Follow task. They also get `gun = 0` and empty pylons. The bomber flies a `Race-Track` orbit from its spawn point to the `end` waypoint, and the fighters `Follow` the bomber's group id.
 - Offsets are computed geodesically with `pyproj.Geod`, then converted with `Point.from_latlng`.
 - `quiet_dcs_install_lookup()` hides pydcs's DCS-install probing noise off Windows. That noise is a `pydcs` logger error plus a bare stderr `print`, once per group.
+- The player group and fighters use their aircraft type's `radio_frequency`; pydcs's 251 MHz group default is invalid for WWII radios and DCS rejects it for the player.
 - Callsigns and board numbers are random per run, so diffs between generated `.miz` files show those even when nothing changed.
+
+## Loss tracker notes (`loss_tracker/`)
+
+- `loss_tracker.lua` runs in DCS's Lua 5.1 scripting environment: no `goto`, integer division or other 5.2+ features. Plain DCS API only, no MIST/MOOSE.
+- Config reaches Lua as a `LossTrackerConfig = {...}` global set by a `DoScript` just before the `DoScriptFile` in the same mission-start trigger. `LossTrackerConfig.to_lua()` serialises it; keep Lua defaults in sync with the dataclass.
+- Every enemy aircraft resolves exactly once. Non-kill events are queued for `resolve_delay_s` so a following `S_EVENT_KILL` can claim them as a shot-down; the first reason otherwise wins.
+- Event objects may be dead, so every DCS method call goes through `try()` (pcall). Aircraft are identified by group category, not `Unit:getCategory()`, whose meaning changed in DCS 2.9.
+- A 5 s poll catches aircraft that vanish or stop on the ground without an event. Aircraft that land at an allied base are marked `safe`, so a later despawn resolves as `returned`, which never earns credit.
+- `tests/test_loss_tracker.py` runs the Lua under `lupa.lua51` against `tests/dcs_mock.lua`. When the tracker calls a new DCS function, add it to the mock.

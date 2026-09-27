@@ -50,6 +50,8 @@ The player start is the same in all four.
 
 You fly a Spitfire LF Mk IX, starting in the air at 6,000 ft about 2 miles south of the target lane over the Strait of Dover. Three German formations fly a racetrack between 50°50'07"N 1°10'40"E and 51°07'44"N 1°35'53"E. Each formation is one Ju 88 leading two Bf 109 K-4s, flying at 5,000, 12,000 and 20,000 ft. The targets have no ammunition, are set to Weapon Hold and don't react to threats.
 
+A target counts as destroyed when it's shot down, crashes, its pilot ejects, or it lands away from a German airfield. Each loss is announced on screen, the F10 radio menu shows the running tally, and the mission ends 30 seconds after the last target is gone. See [Extended loss scoring](#extended-loss-scoring).
+
 ### Required DCS content
 
 - The Channel map
@@ -81,3 +83,24 @@ python -m pytest -q tests
 ```
 
 The tests check the KMZ structure and also the data files: estimated bounds must contain all their airfields, and detail regions must lie inside their terrain.
+
+## Extended loss scoring
+
+`loss_tracker/` is a module you can add to any pydcs mission generator. DCS only scores a kill when an aircraft is destroyed. The tracker also counts an enemy aircraft as lost when it:
+
+- is shot down,
+- crashes,
+- has its pilot eject, or
+- lands anywhere other than an allied airbase, FARP or ship.
+
+The credit goes to the last unit on the player's coalition that hit it within the last 15 minutes. Normal DCS scoring isn't changed. Each loss is announced on screen, the F10 radio menu shows the tally, and once every enemy aircraft is gone the tracker shows a summary and ends the mission.
+
+```python
+from loss_tracker import LossTrackerConfig, add_loss_tracker
+
+add_loss_tracker(mission, LossTrackerConfig(player_coalition="blue"))
+```
+
+`LossTrackerConfig` turns each loss type on or off and sets the timings; see the comments in `loss_tracker/__init__.py`. The script is plain Lua with no MIST or MOOSE dependency, and it's embedded in the `.miz`, so nothing needs installing in DCS.
+
+The tests run the Lua under Lua 5.1 (via `lupa`) against a mock of the DCS scripting API. They check the logic, not DCS itself, so confirm new behaviour in DCS too.

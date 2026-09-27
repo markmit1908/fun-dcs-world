@@ -14,6 +14,8 @@ Creates a DCS World .miz mission on The Channel terrain:
     * Weapon Hold
     * No Reaction to Threat
     * guns/ammunition removed where possible
+- Scoring: loss_tracker counts a target as destroyed when it is shot down,
+  crashes, ejects or lands off-field, and ends the mission once all are gone.
 - Racetrack:
     Start: 50°50'6.86"N, 1°10'40.42"E
     End:   51°7'43.96"N, 1°35'53.10"E
@@ -49,6 +51,8 @@ import dcs.task as task
 from dcs.mapping import LatLng, Point, Vector2
 from dcs.terrain import TheChannel
 from dcs.unit import Skill
+
+from loss_tracker import LossTrackerConfig, add_loss_tracker
 
 try:
     from pyproj import Geod
@@ -398,6 +402,9 @@ def build_and_save(spitfire, fighter, bomber, band_names, output: Path):
         terrain,
     )
 
+    # The UK is blue, so blue units earn credit for German losses.
+    tracker = LossTrackerConfig(player_coalition="blue")
+
     # Mission metadata.
     mission.start_time = datetime(1944, 6, 15, 12, 0, 0)
     if len(band_names) == len(BANDS):
@@ -418,7 +425,11 @@ def build_and_save(spitfire, fighter, bomber, band_names, output: Path):
         "Air-to-air gunnery practice over The Channel.\n\n"
         + formations
         + "Each formation consists of two Bf 109 fighters following one Ju 88 bomber.\n"
-        "Targets are set to Weapon Hold and No Reaction to Threat."
+        "Targets are set to Weapon Hold and No Reaction to Threat.\n\n"
+        "A target counts as destroyed when it is shot down, crashes, its pilot "
+        "ejects, or it lands away from a German airfield. The mission ends "
+        f"{tracker.end_mission_delay_s:.0f} seconds after the last target is "
+        "destroyed. Use the F10 radio menu for the current tally."
     )
     mission.set_description_bluetask_text(
         "Intercept the German drone formations and practice air-to-air gunnery."
@@ -442,6 +453,9 @@ def build_and_save(spitfire, fighter, bomber, band_names, output: Path):
             start,
             end,
         )
+
+    # Extended loss scoring, and end the mission once every target is gone.
+    add_loss_tracker(mission, tracker)
 
     # Save.
     mission.save(str(output))

@@ -1,3 +1,4 @@
 pyproj==3.6.1
 pydcs @ git+https://github.com/dcs-retribution/pydcs.git@retribution
 pytest
+lupa  # tests: runs loss_tracker.lua under Lua 5.1
