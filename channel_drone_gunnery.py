@@ -427,9 +427,11 @@ def build_and_save(spitfire, fighter, bomber, band_names, output: Path):
         + "Each formation consists of two Bf 109 fighters following one Ju 88 bomber.\n"
         "Targets are set to Weapon Hold and No Reaction to Threat.\n\n"
         "A target counts as destroyed when it is shot down, crashes, its pilot "
-        "ejects, or it lands away from a German airfield. The mission ends "
-        f"{tracker.end_mission_delay_s:.0f} seconds after the last target is "
-        "destroyed. Use the F10 radio menu for the current tally."
+        "ejects, or it lands away from a German airfield. Each kill shows the "
+        "rounds you fired for it.\n\n"
+        f"The mission ends {tracker.end_mission_delay_s:.0f} seconds after the "
+        "last target is destroyed or you run out of ammunition, with a summary "
+        "on screen. Use the F10 radio menu for the current tally."
     )
     mission.set_description_bluetask_text(
         "Intercept the German drone formations and practice air-to-air gunnery."

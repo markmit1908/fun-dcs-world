@@ -81,6 +81,16 @@ class Sim:
     def messages(self):
         return [m.text for m in self.mock.messages.values()]
 
+    def splashes(self):
+        """Full-screen (clearview) summaries."""
+        return [m.text for m in self.mock.messages.values() if m.clearview]
+
+    def shoot(self, unit, rounds_left):
+        """One burst: SHOOTING_START, ammo drops to rounds_left, SHOOTING_END."""
+        self.fire("S_EVENT_SHOOTING_START", initiator=unit)
+        unit.rounds = rounds_left
+        self.fire("S_EVENT_SHOOTING_END", initiator=unit)
+
 
 @pytest.fixture
 def sim():
@@ -146,6 +156,39 @@ def test_landing_at_enemy_airbase_is_emergency_landing(sim):
     sim.land(sim.bandit, place=field)
     sim.advance()
     assert sim.result("Bomber") == ("emergency_landing", "Mark")
+
+
+def test_debrief_example_low_band(sim):
+    """Replays a real low-band flight: two ejections, then the last Bf 109
+    lands at Manston (neutral in the generated mission) 200 s after its last hit."""
+    manston = sim.airbase("Manston", 0)
+    fighter1 = sim.unit("LOW Fighters", type="Bf-109K-4")
+    fighter2 = sim.unit("LOW Fighters #2", type="Bf-109K-4")
+    sim.start()
+
+    sim.hit(sim.player, sim.bandit)
+    sim.advance(158)
+    sim.eject(sim.bandit)
+    sim.kill(sim.player, sim.bandit)
+    sim.advance(27)
+    sim.crash(sim.bandit)
+
+    sim.hit(sim.player, fighter1)
+    sim.eject(fighter1)
+    sim.kill(sim.player, fighter1)
+    sim.advance(17)
+    sim.crash(fighter1)
+
+    sim.hit(sim.player, fighter2)
+    sim.advance(200)
+    sim.land(fighter2, place=manston)
+    sim.advance(10)
+
+    assert sim.result("Bomber") == ("kill", "Mark")
+    assert sim.result("LOW Fighters") == ("kill", "Mark")
+    assert sim.result("LOW Fighters #2") == ("emergency_landing", "Mark")
+    sim.advance(sim.config.end_mission_delay_s)
+    assert sim.end_flag is True
 
 
 def test_hit_then_eject_then_crash_counts_once(sim):
@@ -349,10 +392,12 @@ def test_end_flag_after_all_enemies_lost(sim):
     assert sim.end_flag is None  # waits end_mission_delay_s
     sim.advance(sim.config.end_mission_delay_s)
     assert sim.end_flag is True
-    summary = [m for m in sim.messages() if m.startswith("All enemy aircraft eliminated")]
+    summary = [m for m in sim.splashes() if "MISSION COMPLETE" in m]
     assert len(summary) == 1
+    assert "All enemy aircraft eliminated" in summary[0]
     assert "Enemy aircraft lost: 2 of 2" in summary[0]
     assert "Mark: 2" in summary[0]
+    assert "Mission ends in 30 seconds" in summary[0]
 
 
 def test_uncredited_losses_still_end_mission(sim):
@@ -388,6 +433,204 @@ def test_red_player_coalition(sim):
     assert "Bomber" not in sim.tracker.aircraft
 
 
+# Summary screens ------------------------------------------------------------
+
+
+def test_player_crash_shows_mission_failed_once(sim):
+    sim.unit("Other bandit")  # keeps the mission from completing
+    sim.start()
+    sim.hit(sim.player, sim.bandit)
+    sim.kill(sim.player, sim.bandit)
+    sim.advance(125)
+    sim.eject(sim.player)
+    sim.crash(sim.player)
+    sim.fire("S_EVENT_PILOT_DEAD", initiator=sim.player)
+    failed = [m for m in sim.splashes() if "MISSION FAILED" in m]
+    assert len(failed) == 1
+    assert "Mark ejected" in failed[0]
+    assert "Time: 2 min 05 s" in failed[0]
+    assert "0:00  Bomber (Ju-88A4): shot down - Mark" in failed[0]
+    assert sim.end_flag is None
+
+
+def test_ai_wingman_loss_shows_no_summary(sim):
+    wingman = sim.unit("Blue AI", side=BLUE)
+    sim.start()
+    sim.crash(wingman)
+    assert sim.splashes() == []
+
+
+def test_one_of_two_players_down(sim):
+    sim.unit("Spitfire 2", side=BLUE, player="Alex")
+    sim.start()
+    sim.crash(sim.player)
+    assert [m.splitlines()[0] for m in sim.splashes()] == ["==========  Mark DOWN  =========="]
+
+
+def test_no_failure_summary_after_mission_complete(sim):
+    sim.start()
+    sim.kill(sim.player, sim.bandit)
+    sim.crash(sim.player)
+    assert len(sim.splashes()) == 1
+    assert "MISSION COMPLETE" in sim.splashes()[0]
+
+
+# Rounds fired -----------------------------------------------------------------
+
+
+@pytest.fixture
+def armed(sim):
+    sim.player.rounds = 1000
+    sim.second = sim.unit("Fighter", type="Bf-109K-4")
+    sim.start()
+    return sim
+
+
+def rounds(sim, name):
+    state = sim.tracker.aircraft[name]
+    return (state.rounds, state.roundsTotal)
+
+
+def test_rounds_per_kill(armed):
+    sim = armed
+    sim.shoot(sim.player, 800)
+    sim.hit(sim.player, sim.bandit)
+    sim.kill(sim.player, sim.bandit)
+    sim.shoot(sim.player, 500)
+    sim.shoot(sim.player, 400)
+    sim.hit(sim.player, sim.second)
+    sim.crash(sim.second)
+    sim.advance()
+
+    assert rounds(sim, "Bomber") == (200, 200)
+    assert rounds(sim, "Fighter") == (400, 600)
+    assert any("credited to Mark (200 rounds, 200 fired so far)" in m for m in sim.messages())
+    complete = [m for m in sim.splashes() if "MISSION COMPLETE" in m][0]
+    assert "Mark: 2 (600 rounds fired, 300 per kill)" in complete
+    assert "Fighter (Bf-109K-4): crashed - Mark (400 rounds, 600 fired so far)" in complete
+
+
+def test_rounds_read_live_at_kill_time(armed):
+    sim = armed
+    sim.fire("S_EVENT_SHOOTING_START", initiator=sim.player)
+    sim.player.rounds = 900
+    sim.hit(sim.player, sim.bandit)
+    sim.kill(sim.player, sim.bandit)
+    assert rounds(sim, "Bomber") == (100, 100)
+
+
+def test_rounds_survive_rearm(armed):
+    sim = armed
+    sim.shoot(sim.player, 700)
+    sim.player.rounds = 1000  # rearmed
+    sim.shoot(sim.player, 900)
+    sim.hit(sim.player, sim.bandit)
+    sim.kill(sim.player, sim.bandit)
+    assert rounds(sim, "Bomber") == (400, 400)
+
+
+def test_rounds_use_last_known_when_shooter_dead(armed):
+    sim = armed
+    sim.shoot(sim.player, 750)
+    sim.hit(sim.player, sim.bandit)
+    sim.player.alive = False
+    sim.crash(sim.bandit)
+    sim.advance()
+    assert rounds(sim, "Bomber") == (250, 250)
+
+
+def test_rounds_carry_over_to_respawned_player(armed):
+    sim = armed
+    sim.shoot(sim.player, 600)
+    sim.player.alive = False
+    respawn = sim.unit("Spitfire 2", side=BLUE, player="Mark", rounds=1000)
+    sim.shoot(respawn, 900)
+    sim.hit(respawn, sim.bandit)
+    sim.kill(respawn, sim.bandit)
+    assert rounds(sim, "Bomber") == (500, 500)
+
+
+def test_kill_without_shooting_has_no_rounds(sim):
+    sim.start()
+    sim.hit(sim.player, sim.bandit)
+    sim.kill(sim.player, sim.bandit)
+    assert rounds(sim, "Bomber") == (None, None)
+    assert any(m.endswith("credited to Mark") for m in sim.messages())
+
+
+# Out of ammo ------------------------------------------------------------------
+
+
+def test_out_of_ammo_ends_mission(armed):
+    sim = armed
+    sim.shoot(sim.player, 600)
+    sim.hit(sim.player, sim.bandit)
+    sim.kill(sim.player, sim.bandit)
+    sim.shoot(sim.player, 0)
+    out = [m for m in sim.splashes() if "OUT OF AMMO" in m]
+    assert len(out) == 1
+    assert "Mark is out of ammunition" in out[0]
+    assert "Enemy aircraft lost: 1 of 2" in out[0]
+    assert "Mission ends in 30 seconds" in out[0]
+    sim.advance(sim.config.end_mission_delay_s - 1)
+    assert sim.end_flag is None
+    sim.advance(2)
+    assert sim.end_flag is True
+
+
+def test_out_of_ammo_found_by_poll(armed):
+    sim = armed
+    sim.fire("S_EVENT_SHOOTING_START", initiator=sim.player)
+    sim.player.rounds = 0  # no SHOOTING_END
+    sim.advance(10)
+    assert any("OUT OF AMMO" in m for m in sim.splashes())
+
+
+def test_unarmed_player_never_out_of_ammo(sim):
+    sim.start()
+    sim.advance(60)
+    assert sim.splashes() == []
+    assert sim.end_flag is None
+
+
+def test_out_of_ammo_waits_for_every_player(armed):
+    sim = armed
+    other = sim.unit("Spitfire 2", side=BLUE, player="Alex", rounds=1000)
+    sim.advance(10)
+    sim.shoot(sim.player, 0)
+    sim.advance(10)
+    assert sim.splashes() == []
+    sim.shoot(other, 0)
+    assert len(sim.splashes()) == 1
+    assert " are out of ammunition" in sim.splashes()[0]
+
+
+def test_out_of_ammo_disabled(sim):
+    sim.player.rounds = 1000
+    sim.start(LossTrackerConfig(end_mission_when_out_of_ammo=False))
+    sim.shoot(sim.player, 0)
+    sim.advance(60)
+    assert sim.splashes() == []
+    assert sim.end_flag is None
+
+
+def test_complete_after_out_of_ammo_does_not_reschedule(armed):
+    sim = armed
+    sim.shoot(sim.player, 500)
+    sim.hit(sim.player, sim.bandit)
+    sim.kill(sim.player, sim.bandit)
+    sim.hit(sim.player, sim.second)
+    sim.shoot(sim.player, 0)
+    sim.advance(10)
+    sim.crash(sim.second)
+    sim.advance(5)
+    complete = [m for m in sim.splashes() if "MISSION COMPLETE" in m]
+    assert len(complete) == 1
+    assert "Mission ends in" not in complete[0]
+    sim.advance(sim.config.end_mission_delay_s)
+    assert sim.end_flag is True
+
+
 # Python side --------------------------------------------------------------
 
 
@@ -418,17 +661,40 @@ def test_mission_embeds_script_and_end_trigger(tmp_path):
     mission.save(str(path))
 
     with zipfile.ZipFile(path) as miz:
-        names = miz.namelist()
-        assert "l10n/DEFAULT/loss_tracker.lua" in names
-        assert miz.read("l10n/DEFAULT/loss_tracker.lua") == LUA_SCRIPT.read_bytes()
+        script = miz.read("l10n/DEFAULT/loss_tracker.lua").decode()
         text = miz.read("mission").decode()
-        dictionary = miz.read("l10n/DEFAULT/dictionary").decode()
 
+    # Config is baked into the script: DCS mis-resolved DO SCRIPT dictionary text.
+    config = LossTrackerConfig().to_lua()
+    assert script.startswith(config)
+    assert script.endswith(LUA_SCRIPT.read_bytes().decode("utf-8"))
     assert "a_do_script_file" in text
-    assert "a_do_script" in text
+    assert "a_do_script(" not in text
     assert "a_end_mission" in text
-    assert "c_flag_is_true" in text
-    assert "LossTrackerConfig" in dictionary
+    assert "c_flag_is_true(9001)" in text
+
+    # The embedded script runs as one chunk and picks up the config.
+    sim = Sim()
+    sim.lua.execute(script)
+    assert sim.g.LossTracker.config.end_flag == 9001
+
+
+def test_embedded_config_overrides_defaults(tmp_path):
+    import dcs
+    from dcs.terrain import Caucasus
+
+    mission = dcs.Mission(Caucasus())
+    add_loss_tracker(mission, LossTrackerConfig(player_coalition="red", end_flag=42))
+    path = tmp_path / "tracked.miz"
+    mission.save(str(path))
+    with zipfile.ZipFile(path) as miz:
+        script = miz.read("l10n/DEFAULT/loss_tracker.lua").decode()
+
+    sim = Sim()
+    sim.lua.execute(script)
+    tracker = sim.g.LossTracker
+    assert tracker.playerSide == RED
+    assert tracker.config.end_flag == 42
 
 
 def test_mission_without_end_trigger():
@@ -436,5 +702,17 @@ def test_mission_without_end_trigger():
     from dcs.terrain import Caucasus
 
     mission = dcs.Mission(Caucasus())
-    add_loss_tracker(mission, LossTrackerConfig(end_mission_when_all_lost=False))
+    add_loss_tracker(
+        mission,
+        LossTrackerConfig(end_mission_when_all_lost=False, end_mission_when_out_of_ammo=False),
+    )
     assert len(mission.triggerrules.triggers) == 1
+
+
+def test_mission_with_only_out_of_ammo_end():
+    import dcs
+    from dcs.terrain import Caucasus
+
+    mission = dcs.Mission(Caucasus())
+    add_loss_tracker(mission, LossTrackerConfig(end_mission_when_all_lost=False))
+    assert len(mission.triggerrules.triggers) == 2

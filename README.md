@@ -50,13 +50,23 @@ The player start is the same in all four.
 
 You fly a Spitfire LF Mk IX, starting in the air at 6,000 ft about 2 miles south of the target lane over the Strait of Dover. Three German formations fly a racetrack between 50°50'07"N 1°10'40"E and 51°07'44"N 1°35'53"E. Each formation is one Ju 88 leading two Bf 109 K-4s, flying at 5,000, 12,000 and 20,000 ft. The targets have no ammunition, are set to Weapon Hold and don't react to threats.
 
-A target counts as destroyed when it's shot down, crashes, its pilot ejects, or it lands away from a German airfield. Each loss is announced on screen, the F10 radio menu shows the running tally, and the mission ends 30 seconds after the last target is gone. See [Extended loss scoring](#extended-loss-scoring).
+A target counts as destroyed when it's shot down, crashes, its pilot ejects, or it lands away from a German airfield. Each loss is announced on screen with the rounds you fired for it, and the F10 radio menu shows the running tally. The mission ends 30 seconds after the last target is gone or you run out of ammunition, with a summary screen. See [Extended loss scoring](#extended-loss-scoring).
 
 ### Required DCS content
 
 - The Channel map
 - Spitfire LF Mk IX module
 - WWII Assets Pack (the Ju 88 is an asset-pack aircraft)
+
+### Installing the missions in DCS
+
+On the Windows PC with DCS, run:
+
+```bash
+python install_missions.py    # copies every .miz here into Saved Games\DCS\Missions
+```
+
+It does nothing if that folder doesn't exist. Use `--dest` for a different folder, such as `DCS.openbeta\Missions`.
 
 ### Installing the mission in DCS manually
 
@@ -93,7 +103,17 @@ The tests check the KMZ structure and also the data files: estimated bounds must
 - has its pilot eject, or
 - lands anywhere other than an allied airbase, FARP or ship.
 
-The credit goes to the last unit on the player's coalition that hit it within the last 15 minutes. Normal DCS scoring isn't changed. Each loss is announced on screen, the F10 radio menu shows the tally, and once every enemy aircraft is gone the tracker shows a summary and ends the mission.
+The credit goes to the last unit on the player's coalition that hit it within the last 15 minutes. Normal DCS scoring isn't changed. Each loss is announced on screen with the rounds the attacker fired for it, and the F10 radio menu shows the tally.
+
+A full-screen summary lists every enemy aircraft with the time of its loss, how it was lost, who gets the credit, the rounds fired for that kill and the running total, plus each attacker's rounds per kill. It appears when:
+
+| Title | When | Mission |
+| --- | --- | --- |
+| MISSION COMPLETE | Every enemy aircraft is lost | Ends 30 s later |
+| OUT OF AMMO | Every human pilot on the player's side has used up their ammunition | Ends 30 s later |
+| MISSION FAILED | A human pilot's aircraft is lost (crash, ejection, pilot killed) | Keeps running |
+
+In multiplayer, losing one of several pilots shows "<name> DOWN" instead of MISSION FAILED. DCS has no per-round event for guns, so rounds come from the shooter's ammo count at each kill. Rearming and respawning are allowed for. The summary is also written to `Saved Games\DCS\Logs\dcs.log` on `LossTracker:` lines. It can't appear on DCS's own debriefing screen.
 
 ```python
 from loss_tracker import LossTrackerConfig, add_loss_tracker

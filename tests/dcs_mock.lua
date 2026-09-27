@@ -24,6 +24,7 @@ world = {
         S_EVENT_SHOT = 1, S_EVENT_HIT = 2, S_EVENT_TAKEOFF = 3, S_EVENT_LAND = 4,
         S_EVENT_CRASH = 5, S_EVENT_EJECTION = 6, S_EVENT_DEAD = 8, S_EVENT_PILOT_DEAD = 9,
         S_EVENT_MISSION_START = 11, S_EVENT_MISSION_END = 12, S_EVENT_BIRTH = 15,
+        S_EVENT_SHOOTING_START = 23, S_EVENT_SHOOTING_END = 24,
         S_EVENT_KILL = 28, S_EVENT_UNIT_LOST = 30,
     },
 }
@@ -40,8 +41,8 @@ trigger = { action = {} }
 function trigger.action.outText(text, duration)
     table.insert(Mock.messages, { side = "all", text = text })
 end
-function trigger.action.outTextForCoalition(side, text, duration)
-    table.insert(Mock.messages, { side = side, text = text })
+function trigger.action.outTextForCoalition(side, text, duration, clearview)
+    table.insert(Mock.messages, { side = side, text = text, duration = duration, clearview = clearview == true })
 end
 function trigger.action.setUserFlag(flag, value) Mock.flags[flag] = value end
 
@@ -67,6 +68,11 @@ function UnitMethods:inAir() return self.in_air end
 function UnitMethods:getPoint() return self.point end
 function UnitMethods:getVelocity() return { x = self.speed, y = 0, z = 0 } end
 function UnitMethods:getGroup() return self.group end
+-- Like DCS, nil once all ammo is expended.
+function UnitMethods:getAmmo()
+    if (self.rounds or 0) <= 0 then return nil end
+    return { { count = self.rounds, desc = {} } }
+end
 
 local GroupMethods = {}
 GroupMethods.__index = GroupMethods
@@ -81,7 +87,7 @@ function Unit.getByName(name)
 end
 
 -- Create a unit in its own group. opts: side, type, category, player,
--- in_air (default true), active (default true), x, z, speed.
+-- in_air (default true), active (default true), x, z, speed, rounds.
 function Mock.addUnit(name, opts)
     opts = opts or {}
     local unit = setmetatable({
@@ -94,6 +100,7 @@ function Mock.addUnit(name, opts)
         in_air = opts.in_air ~= false,
         point = { x = opts.x or 0, y = 0, z = opts.z or 0 },
         speed = opts.speed or 100,
+        rounds = opts.rounds,
     }, UnitMethods)
     unit.group = setmetatable({ unit = unit, category = opts.category or Group.Category.AIRPLANE }, GroupMethods)
     Mock.units[name] = unit
@@ -108,6 +115,16 @@ function coalition.getGroups(side, category)
         end
     end
     return groups
+end
+
+function coalition.getPlayers(side)
+    local players = {}
+    for _, unit in pairs(Mock.units) do
+        if unit.side == side and unit.player and unit.alive then
+            table.insert(players, unit)
+        end
+    end
+    return players
 end
 
 local BaseMethods = {}

@@ -8,7 +8,7 @@ Two independent pydcs scripts, plus a reusable module:
 
 - `dcs_maps_to_kmz.py` exports every DCS World terrain known to pydcs as a KMZ for Google Earth (visual reference, not mission planning). Layers: each terrain's DCS Cartesian origin (0,0), its bounds rectangle, curated high-detail polygons, and pydcs airfields.
 - `channel_drone_gunnery.py` generates `channel_drone_gunnery.miz`, a WWII gunnery-practice mission on The Channel: a player Spitfire LF Mk IX plus three passive German formations (1 Ju-88 leading 2 Bf-109s) flying racetracks at 5k/12k/20k ft. It also writes `_low`/`_medium`/`_high` variants with a single formation each (`VARIANTS`).
-- `loss_tracker/` is a mission-generator-agnostic module. `add_loss_tracker(mission, LossTrackerConfig(...))` embeds `loss_tracker.lua`, which credits an enemy aircraft loss (kill, crash, ejection, landing away from an allied base) to the last player-coalition attacker, announces it, and sets `end_flag` when every enemy aircraft is gone (an `EndMission` trigger watches the flag).
+- `loss_tracker/` is a mission-generator-agnostic module. `add_loss_tracker(mission, LossTrackerConfig(...))` embeds `loss_tracker.lua`, which credits an enemy aircraft loss (kill, crash, ejection, landing away from an allied base) to the last player-coalition attacker, announces it with the rounds fired for it, and shows a full-screen summary (MISSION COMPLETE / OUT OF AMMO / MISSION FAILED). Every enemy lost or every human pilot out of ammo sets `end_flag` after `end_mission_delay_s`; an `EndMission` trigger watches it.
 
 ## Commands
 
@@ -22,6 +22,7 @@ python dcs_maps_to_kmz.py             # writes dcs_world_maps.kmz
 python dcs_maps_to_kmz.py --output out.kmz --detail-regions other.json --bounds-overrides other.json --no-airports --samples-per-edge 50
 
 python channel_drone_gunnery.py      # writes channel_drone_gunnery{,_low,_medium,_high}.miz next to the script
+python install_missions.py           # copies every .miz here into ~/Saved Games/DCS/Missions (skips if missing; --dest to override)
 
 python -m pytest -q tests                                        # all tests
 python -m pytest -q tests/test_kmz.py::test_detail_regions_inside_terrain
@@ -57,8 +58,10 @@ python -m pytest -q tests/test_kmz.py::test_detail_regions_inside_terrain
 ## Loss tracker notes (`loss_tracker/`)
 
 - `loss_tracker.lua` runs in DCS's Lua 5.1 scripting environment: no `goto`, integer division or other 5.2+ features. Plain DCS API only, no MIST/MOOSE.
-- Config reaches Lua as a `LossTrackerConfig = {...}` global set by a `DoScript` just before the `DoScriptFile` in the same mission-start trigger. `LossTrackerConfig.to_lua()` serialises it; keep Lua defaults in sync with the dataclass.
+- Config reaches Lua as a `LossTrackerConfig = {...}` global prepended (`to_lua()`) to a per-mission temp copy of `loss_tracker.lua`, embedded with `DoScriptFile`. Don't use `DoScript` or text-bearing actions: in DCS, `getValueDictByKey` failed for a pydcs `DictKey_Translation_*` key and ran the key name as Lua. Keep Lua defaults in sync with the dataclass.
 - Every enemy aircraft resolves exactly once. Non-kill events are queued for `resolve_delay_s` so a following `S_EVENT_KILL` can claim them as a shot-down; the first reason otherwise wins.
 - Event objects may be dead, so every DCS method call goes through `try()` (pcall). Aircraft are identified by group category, not `Unit:getCategory()`, whose meaning changed in DCS 2.9.
 - A 5 s poll catches aircraft that vanish or stop on the ground without an event. Aircraft that land at an allied base are marked `safe`, so a later despawn resolves as `returned`, which never earns credit.
+- Rounds fired come from `Unit:getAmmo()` totals: the baseline is taken at the shooter's first `SHOOTING_START`/`SHOT` and read again at each credited loss (DCS has no per-round gun event). `getAmmo()` returns nil when empty, so treat nil on a live unit as 0. Stats are keyed by attacker label, so a respawned player's count carries over, and an ammo increase raises the baseline (rearm).
+- The summary "splash" is `outTextForCoalition(..., clearview=true)`; mission scripts can't draw custom UI or write to the DCS debrief.
 - `tests/test_loss_tracker.py` runs the Lua under `lupa.lua51` against `tests/dcs_mock.lua`. When the tracker calls a new DCS function, add it to the mock.

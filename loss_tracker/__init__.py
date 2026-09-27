@@ -5,8 +5,10 @@ DCS only scores a kill when an aircraft is destroyed. ``add_loss_tracker``
 embeds ``loss_tracker.lua`` in a mission so that an enemy aircraft also counts
 as lost, credited to the last player-coalition unit that hit it, when it
 crashes, its pilot ejects, or it lands away from an allied base. Losses are
-announced on screen and summarised when every enemy aircraft is gone, at which
-point the mission can end.
+announced on screen with the rounds the attacker fired for them. A full-screen
+summary appears when every enemy aircraft is gone ("MISSION COMPLETE", after
+which the mission can end) or when a player's aircraft is lost ("MISSION
+FAILED").
 
 Usage:
     from loss_tracker import LossTrackerConfig, add_loss_tracker
@@ -18,12 +20,17 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
+import tempfile
 
 import dcs
 from dcs import action, condition, triggers
 
 LUA_SCRIPT = Path(__file__).resolve().with_name("loss_tracker.lua")
+
+# pydcs reads resource files when the mission is saved, so the per-mission
+# scripts must outlive add_loss_tracker(). They are removed at exit.
+_script_dirs: List[tempfile.TemporaryDirectory] = []
 
 
 @dataclass
@@ -51,10 +58,18 @@ class LossTrackerConfig:
     # without an event.
     poll_interval_s: float = 5.0
     message_duration_s: int = 10
+    # How long the "MISSION FAILED" summary stays up after a player's aircraft
+    # is lost. The "MISSION COMPLETE" one stays until the mission ends.
+    summary_duration_s: int = 60
 
-    # Set end_flag once every enemy aircraft is lost, and end the mission
-    # end_mission_delay_s later when end_mission_when_all_lost is True.
+    # End conditions. When one is met, a summary is shown and the mission
+    # ends end_mission_delay_s later (the tracker sets end_flag, which an
+    # EndMission trigger watches).
+    # Every enemy aircraft is lost ("MISSION COMPLETE").
     end_mission_when_all_lost: bool = True
+    # Every human pilot on the player's coalition has used up all their ammo
+    # ("OUT OF AMMO"). Pilots who started with none don't count.
+    end_mission_when_out_of_ammo: bool = True
     end_mission_delay_s: float = 30.0
     end_flag: int = 9001
 
@@ -69,6 +84,7 @@ class LossTrackerConfig:
             "allied_base_radius_m",
             "poll_interval_s",
             "message_duration_s",
+            "summary_duration_s",
             "end_mission_delay_s",
         ):
             if getattr(self, name) <= 0:
@@ -94,21 +110,31 @@ def add_loss_tracker(
     """
     Embed the loss tracker in ``mission``.
 
-    Adds a mission-start trigger that sets ``LossTrackerConfig`` and runs
-    ``loss_tracker.lua``, plus, when enabled, a trigger that ends the mission
-    once the tracker sets ``config.end_flag``. Returns the config used.
+    Adds a mission-start trigger that runs ``loss_tracker.lua`` with the
+    config prepended, plus, when enabled, a trigger that ends the mission once
+    the tracker sets ``config.end_flag``. Returns the config used.
+
+    The config is baked into the script file rather than passed through a
+    DO SCRIPT action: DCS failed to resolve the DO SCRIPT's dictionary text in
+    a pydcs-generated mission and ran the key name as Lua instead.
     """
     config = config or LossTrackerConfig()
 
+    script_dir = tempfile.TemporaryDirectory(prefix="loss_tracker_")
+    _script_dirs.append(script_dir)
+    script = Path(script_dir.name) / LUA_SCRIPT.name
+    # Bytes, so Windows doesn't turn "\n" into "\r\n".
+    script.write_bytes(config.to_lua().encode("utf-8") + b"\n" + LUA_SCRIPT.read_bytes())
+
     start = triggers.TriggerStart(comment="Loss tracker")
-    start.add_action(action.DoScript(mission.string(config.to_lua())))
-    start.add_action(action.DoScriptFile(mission.map_resource.add_resource_file(LUA_SCRIPT)))
+    start.add_action(action.DoScriptFile(mission.map_resource.add_resource_file(script)))
     mission.triggerrules.triggers.append(start)
 
-    if config.end_mission_when_all_lost:
-        end = triggers.TriggerOnce(comment="Loss tracker: all enemy aircraft lost")
+    if config.end_mission_when_all_lost or config.end_mission_when_out_of_ammo:
+        end = triggers.TriggerOnce(comment="Loss tracker: end mission")
         end.add_condition(condition.FlagIsTrue(config.end_flag))
-        end.add_action(action.EndMission(text=mission.string("All enemy aircraft eliminated.")))
+        # No end text: it would also be a dictionary lookup.
+        end.add_action(action.EndMission())
         mission.triggerrules.triggers.append(end)
 
     return config
