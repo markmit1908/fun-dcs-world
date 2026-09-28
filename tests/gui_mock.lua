@@ -26,6 +26,9 @@ function Sim.writeDebriefing(text) table.insert(GuiMock.debriefing, text) end
 function Sim.getMissionName() return "channel_drone_gunnery_low" end
 function Sim.getModelTime() return GuiMock.modelTime end
 function Sim.isMultiplayer() return GuiMock.multiplayer end
+GuiMock.paused = false
+function Sim.getPause() return GuiMock.paused end
+function Sim.setPause(paused) GuiMock.paused = paused end
 
 lfs = {}
 function lfs.writedir() return GuiMock.writedir end

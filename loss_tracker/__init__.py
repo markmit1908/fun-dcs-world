@@ -18,7 +18,7 @@ Usage:
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import List, Optional
 import tempfile
@@ -37,6 +37,9 @@ _script_dirs: List[tempfile.TemporaryDirectory] = []
 class LossTrackerConfig:
     # Coalition whose units earn credit; the other one is tracked as enemy.
     player_coalition: str = "blue"
+    # Shown in summaries and the LossTracker.log history. Empty means the
+    # mission's sortie text at the time add_loss_tracker() is called.
+    mission_name: str = ""
 
     # A crash always removes the aircraft; this decides whether the last
     # attacker gets credit for it.
@@ -99,7 +102,11 @@ class LossTrackerConfig:
             elif isinstance(value, (int, float)):
                 text = repr(value)
             else:
-                text = '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+                text = (
+                    '"'
+                    + str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+                    + '"'
+                )
             fields.append(f"    {key} = {text},")
         return "LossTrackerConfig = {\n" + "\n".join(fields) + "\n}\n"
 
@@ -114,11 +121,17 @@ def add_loss_tracker(
     config prepended, plus, when enabled, a trigger that ends the mission once
     the tracker sets ``config.end_flag``. Returns the config used.
 
+    Call it after setting the mission's sortie text, which becomes
+    ``mission_name`` unless the config sets one.
+
     The config is baked into the script file rather than passed through a
     DO SCRIPT action: DCS failed to resolve the DO SCRIPT's dictionary text in
     a pydcs-generated mission and ran the key name as Lua instead.
     """
     config = config or LossTrackerConfig()
+    if not config.mission_name:
+        # DCS only knows the running copy as "tempMission", so bake the name in.
+        config = replace(config, mission_name=mission.sortie_text())
 
     script_dir = tempfile.TemporaryDirectory(prefix="loss_tracker_")
     _script_dirs.append(script_dir)

@@ -107,7 +107,8 @@ def test_simulation_stop_hides(gui):
 
 def test_summary_written_to_debriefing_and_history(gui, tmp_path):
     gui.message(SUMMARY)
-    assert gui.debriefing() == [SUMMARY]
+    # One debrief row per non-blank line, since the debrief table's rows are one line high.
+    assert gui.debriefing() == [line.strip() for line in SUMMARY.splitlines() if line.strip()]
     history = (tmp_path / "Logs" / "LossTracker.log").read_text()
     assert "channel_drone_gunnery_low" in history
     assert SUMMARY in history
@@ -161,7 +162,7 @@ def test_window_failure_is_logged_not_raised(gui):
     gui.lua.execute('package.loaded["DialogLoader"] = nil; package.preload["DialogLoader"] = function() error("no dlg") end')
     gui.message(SUMMARY)
     assert any("window failed" in e for e in gui.errors())
-    assert gui.debriefing() == [SUMMARY]
+    assert gui.debriefing()[0] == "==========  MISSION COMPLETE  =========="
 
 
 def test_tracker_shortens_summary_when_hook_present():
@@ -175,3 +176,41 @@ def test_tracker_shortens_summary_when_hook_present():
     sim.kill(player, bandit)
     splash = [m for m in sim.mock.messages.values() if m.clearview][0]
     assert splash.duration == 2
+
+
+def test_pauses_single_player_until_closed(gui):
+    gui.message(SUMMARY)
+    assert gui.mock.paused is True
+    gui.window.onClose()
+    assert gui.window.visible is False
+    assert gui.mock.paused is False
+
+
+def test_does_not_unpause_if_already_paused(gui):
+    gui.mock.paused = True
+    gui.message(SUMMARY)
+    gui.window.onClose()
+    assert gui.mock.paused is True
+
+
+def test_never_pauses_multiplayer(gui):
+    gui.mock.multiplayer = True
+    gui.message(SUMMARY)
+    assert gui.window.visible
+    assert gui.mock.paused is False
+
+
+def test_loss_messages_do_not_pause(gui):
+    gui.message(LOSS)
+    assert gui.mock.paused is False
+
+
+def test_history_uses_mission_line(gui, tmp_path):
+    summary = SUMMARY.replace(
+        "All enemy aircraft eliminated\n",
+        "All enemy aircraft eliminated\nMission: Channel Drone Gunnery (Low)\n",
+    )
+    gui.message(summary)
+    history = (tmp_path / "Logs" / "LossTracker.log").read_text()
+    assert "  Channel Drone Gunnery (Low)\n" in history
+    assert "channel_drone_gunnery_low" not in history

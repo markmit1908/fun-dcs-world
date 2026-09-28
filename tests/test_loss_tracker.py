@@ -716,3 +716,33 @@ def test_mission_with_only_out_of_ammo_end():
     mission = dcs.Mission(Caucasus())
     add_loss_tracker(mission, LossTrackerConfig(end_mission_when_all_lost=False))
     assert len(mission.triggerrules.triggers) == 2
+
+
+def test_summary_names_mission():
+    sim = Sim()
+    player = sim.unit("Spitfire", side=BLUE, player="Mark")
+    bandit = sim.unit("Bomber")
+    sim.start(LossTrackerConfig(mission_name='Channel "Drone" Gunnery\n(Low)'))
+    sim.kill(player, bandit)
+    lines = sim.splashes()[0].splitlines()
+    assert lines[1:3] == ["All enemy aircraft eliminated", 'Mission: Channel "Drone" Gunnery']
+    assert lines[3] == "(Low)"
+
+
+def test_summary_without_mission_name(sim):
+    sim.start()
+    sim.kill(sim.player, sim.bandit)
+    assert "Mission:" not in sim.splashes()[0]
+
+
+def test_mission_name_defaults_to_sortie_text(tmp_path):
+    import dcs
+    from dcs.terrain import Caucasus
+
+    mission = dcs.Mission(Caucasus())
+    mission.set_sortie_text("Channel Drone Gunnery (Low)")
+    config = add_loss_tracker(mission)
+    assert config.mission_name == "Channel Drone Gunnery (Low)"
+
+    kept = add_loss_tracker(dcs.Mission(Caucasus()), LossTrackerConfig(mission_name="Custom"))
+    assert kept.mission_name == "Custom"

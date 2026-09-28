@@ -7,7 +7,9 @@ mission scripts. It:
 
 - shows the tracker's MISSION COMPLETE / OUT OF AMMO / MISSION FAILED summary
   in a real centred window (reusing DCS's own ImportantNoticeDialog layout),
-- writes each loss and every summary into the mission's debriefing file,
+  pausing single-player missions until the window is closed,
+- writes each loss and every summary line into the mission's debriefing file,
+  where they appear as "comment" rows in the debrief screen's event list,
 - appends every summary to Saved Games\DCS\Logs\LossTracker.log.
 
 The tracker's on-screen messages arrive through onTriggerMessage, so no
@@ -28,6 +30,7 @@ package.path = package.path .. ";.\\Scripts\\?.lua;.\\Scripts\\UI\\?.lua;"
 
 local hook = {}
 local window, templates
+local pausedByHook = false
 local missionTold, nextTellTime = false, 0
 
 local function lines(text)
@@ -66,7 +69,7 @@ local function createWindow()
         { title = "Mission summary", dontShowUntilNextUpdate = "" })
     templates = window.templateWidgets
     window.cbDontShow:setVisible(false)
-    window.onClose = function() window:setVisible(false) end
+    window.onClose = function() hook.closeWindow() end
 
     local screenW, screenH = dxgui.GetWindowSize()
     local w, h = math.min(1100, screenW - 40), math.min(620, screenH - 40)
@@ -106,13 +109,39 @@ local function showWindow(summary)
     window:setVisible(true)
 end
 
+-- Pause while the summary is up, single player only: in multiplayer this
+-- would freeze the server for everyone.
+local function pauseForWindow()
+    if SimAPI.isMultiplayer() or SimAPI.getPause() then return end
+    SimAPI.setPause(true)
+    pausedByHook = true
+end
+
 local function hideWindow()
     if window then window:setVisible(false) end
+end
+
+-- Close button: hide and resume if the hook paused the simulation.
+function hook.closeWindow()
+    hideWindow()
+    if pausedByHook then
+        pausedByHook = false
+        SimAPI.setPause(false)
+    end
 end
 
 local function writeDebriefing(text)
     local okWrite, err = pcall(SimAPI.writeDebriefing, text)
     if not okWrite then logError("writeDebriefing failed: " .. tostring(err)) end
+end
+
+-- Each writeDebriefing() call becomes a "comment" row in the debrief
+-- screen's event list, whose rows are one line high, so write one per line.
+local function writeDebriefingLines(text)
+    for _, line in ipairs(lines(text)) do
+        local trimmed = line:match("^%s*(.-)%s*$")
+        if trimmed ~= "" then writeDebriefing(trimmed) end
+    end
 end
 
 local function appendHistory(text)
@@ -122,8 +151,13 @@ local function appendHistory(text)
         logError("can't open " .. path)
         return
     end
-    local mission = "?"
-    pcall(function() mission = SimAPI.getMissionName() end)
+    -- The tracker names the mission in the summary; DCS itself only knows the
+    -- running copy as "tempMission".
+    local mission = text:match("\nMission: ([^\n]+)")
+    if mission == nil then
+        mission = "?"
+        pcall(function() mission = SimAPI.getMissionName() end)
+    end
     file:write(os.date("%Y-%m-%d %H:%M:%S"), "  ", mission, "\n", text, "\n\n")
     file:close()
 end
@@ -144,8 +178,13 @@ function hook.onTriggerMessage(message, duration, clearView)
     local summary = parseSummary(message)
     if summary then
         local okShow, err = pcall(showWindow, summary)
-        if not okShow then logError("window failed: " .. tostring(err)) end
-        writeDebriefing(message)
+        if okShow then
+            local okPause, pauseErr = pcall(pauseForWindow)
+            if not okPause then logError("pause failed: " .. tostring(pauseErr)) end
+        else
+            logError("window failed: " .. tostring(err))
+        end
+        writeDebriefingLines(message)
         appendHistory(message)
     elseif isLossMessage(message) then
         writeDebriefing("LossTracker: " .. message)
@@ -170,6 +209,7 @@ end
 
 function hook.onSimulationStop()
     hideWindow()
+    pausedByHook = false
 end
 
 hook._test = { parseSummary = parseSummary, isLossMessage = isLossMessage }

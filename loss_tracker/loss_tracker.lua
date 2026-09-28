@@ -16,6 +16,7 @@ Written for the Lua 5.1 mission scripting environment.
 
 local defaults = {
     player_coalition = "blue",
+    mission_name = "",
     crash_is_loss = true,
     ejection_is_loss = true,
     emergency_landing_is_loss = true,
@@ -424,13 +425,13 @@ end
 -- to a splash screen as mission scripting gets.
 function LT.showSplash(title, subtitle, footer, duration)
     local elapsed = timer.getTime() - LT.startTime
-    local lines = {
-        "==========  " .. title .. "  ==========",
-        subtitle,
-        string.format("Time: %d min %02d s", math.floor(elapsed / 60), math.floor(elapsed % 60)),
-        "",
-        LT.summary(true),
-    }
+    local lines = { "==========  " .. title .. "  ==========", subtitle }
+    if cfg.mission_name ~= "" then
+        table.insert(lines, "Mission: " .. cfg.mission_name)
+    end
+    table.insert(lines, string.format("Time: %d min %02d s", math.floor(elapsed / 60), math.floor(elapsed % 60)))
+    table.insert(lines, "")
+    table.insert(lines, LT.summary(true))
     if footer then
         table.insert(lines, "")
         table.insert(lines, footer)
