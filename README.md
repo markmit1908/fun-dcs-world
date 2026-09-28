@@ -66,7 +66,7 @@ On the Windows PC with DCS, run:
 python install_missions.py    # copies every .miz here into Saved Games\DCS\Missions
 ```
 
-It does nothing if that folder doesn't exist. Use `--dest` for a different folder, such as `DCS.openbeta\Missions`.
+It also installs the loss tracker's window hook into `Saved Games\DCS\Scripts\Hooks`. Restart DCS after the first install; `--no-hook` skips it. It does nothing if the Missions folder doesn't exist. Use `--dest` for a different folder, such as `DCS.openbeta\Missions`.
 
 ### Installing the mission in DCS manually
 
@@ -113,7 +113,9 @@ A full-screen summary lists every enemy aircraft with the time of its loss, how 
 | OUT OF AMMO | Every human pilot on the player's side has used up their ammunition | Ends 30 s later |
 | MISSION FAILED | A human pilot's aircraft is lost (crash, ejection, pilot killed) | Keeps running |
 
-In multiplayer, losing one of several pilots shows "<name> DOWN" instead of MISSION FAILED. DCS has no per-round event for guns, so rounds come from the shooter's ammo count at each kill. Rearming and respawning are allowed for. The summary is also written to `Saved Games\DCS\Logs\dcs.log` on `LossTracker:` lines. It can't appear on DCS's own debriefing screen.
+With the hook `loss_tracker/LossTrackerGameGUI.lua` installed (see above), the summary opens in a real window with a close button, built from DCS's own notice dialog. The hook also writes every loss and summary into the mission's debriefing log, and appends each summary to `Saved Games\DCS\Logs\LossTracker.log`. Without the hook the summary is a full-screen text message. Mission scripts can't draw windows or write files, which is why this part is a separate hook.
+
+In multiplayer, losing one of several pilots shows "<name> DOWN" instead of MISSION FAILED. DCS has no per-round event for guns, so rounds come from the shooter's ammo count at each kill. Rearming and respawning are allowed for. The summary is also written to `Saved Games\DCS\Logs\dcs.log` on `LossTracker:` lines.
 
 ```python
 from loss_tracker import LossTrackerConfig, add_loss_tracker

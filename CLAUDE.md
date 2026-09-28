@@ -22,7 +22,7 @@ python dcs_maps_to_kmz.py             # writes dcs_world_maps.kmz
 python dcs_maps_to_kmz.py --output out.kmz --detail-regions other.json --bounds-overrides other.json --no-airports --samples-per-edge 50
 
 python channel_drone_gunnery.py      # writes channel_drone_gunnery{,_low,_medium,_high}.miz next to the script
-python install_missions.py           # copies every .miz here into ~/Saved Games/DCS/Missions (skips if missing; --dest to override)
+python install_missions.py           # copies every .miz here into ~/Saved Games/DCS/Missions and the GUI hook into ../Scripts/Hooks (skips if missing; --dest, --no-hook)
 
 python -m pytest -q tests                                        # all tests
 python -m pytest -q tests/test_kmz.py::test_detail_regions_inside_terrain
@@ -63,5 +63,7 @@ python -m pytest -q tests/test_kmz.py::test_detail_regions_inside_terrain
 - Event objects may be dead, so every DCS method call goes through `try()` (pcall). Aircraft are identified by group category, not `Unit:getCategory()`, whose meaning changed in DCS 2.9.
 - A 5 s poll catches aircraft that vanish or stop on the ground without an event. Aircraft that land at an allied base are marked `safe`, so a later despawn resolves as `returned`, which never earns credit.
 - Rounds fired come from `Unit:getAmmo()` totals: the baseline is taken at the shooter's first `SHOOTING_START`/`SHOT` and read again at each credited loss (DCS has no per-round gun event). `getAmmo()` returns nil when empty, so treat nil on a live unit as 0. Stats are keyed by attacker label, so a respawned player's count carries over, and an ammo increase raises the baseline (rearm).
-- The summary "splash" is `outTextForCoalition(..., clearview=true)`; mission scripts can't draw custom UI or write to the DCS debrief.
+- The summary is `outTextForCoalition(..., clearview=true)` with a `==========  TITLE  ==========` first line. Mission scripts can't draw UI or write files, so `LossTrackerGameGUI.lua` (a GameGUI hook in `Saved Games/DCS/Scripts/Hooks`, installed by `install_missions.py`) receives it through `onTriggerMessage`, shows it by spawning DCS's `Scripts/UI/ImportantNoticeDialog.dlg`, and writes losses/summaries with `Sim.writeDebriefing` (the debrief log) plus `Logs/LossTracker.log`. Keep the title line and the ` - credited to ` / ` - no credit` loss wording in sync with the hook's parsing.
+- In single player the hook sets `LossTracker.hookPresent` via `a_do_script` so the summary text only flashes for 2 s behind the window. Never in multiplayer: the tracker runs on the server.
+- The hook API is documented in the DCS install at `API/Sim_ControlAPI.md` (`Sim.*`, formerly `DCS.*`). `tests/gui_mock.lua` stubs it and the dxgui widgets for `tests/test_gui_hook.py`.
 - `tests/test_loss_tracker.py` runs the Lua under `lupa.lua51` against `tests/dcs_mock.lua`. When the tracker calls a new DCS function, add it to the mock.

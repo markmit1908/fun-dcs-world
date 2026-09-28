@@ -1,0 +1,185 @@
+--[[
+LossTrackerGameGUI.lua: DCS GameGUI hook for loss_tracker.lua.
+
+Install into Saved Games\DCS\Scripts\Hooks (install_missions.py does it). It
+runs in DCS's GUI Lua state, which can draw windows and write files, unlike
+mission scripts. It:
+
+- shows the tracker's MISSION COMPLETE / OUT OF AMMO / MISSION FAILED summary
+  in a real centred window (reusing DCS's own ImportantNoticeDialog layout),
+- writes each loss and every summary into the mission's debriefing file,
+- appends every summary to Saved Games\DCS\Logs\LossTracker.log.
+
+The tracker's on-screen messages arrive through onTriggerMessage, so no
+unsafe APIs are needed. In single player the hook also tells the tracker it is
+installed, so the summary text message only flashes briefly behind the window.
+Without this hook, the tracker works as before with text messages only.
+]]
+
+local ok, loadError = pcall(function()
+
+local SimAPI = Sim or DCS  -- renamed from DCS.* to Sim.* in newer versions
+local SUBSYSTEM = "LossTracker"
+
+local function logInfo(message) log.write(SUBSYSTEM, log.INFO, message) end
+local function logError(message) log.write(SUBSYSTEM, log.ERROR, message) end
+
+package.path = package.path .. ";.\\Scripts\\?.lua;.\\Scripts\\UI\\?.lua;"
+
+local hook = {}
+local window, templates
+local missionTold, nextTellTime = false, 0
+
+local function lines(text)
+    local result = {}
+    for line in (text .. "\n"):gmatch("(.-)\r?\n") do table.insert(result, line) end
+    return result
+end
+
+-- Summary messages start with "==========  TITLE  ==========". Returns the
+-- title and the rest split into sections at blank lines.
+local function parseSummary(message)
+    local title = message:match("^==========  (.-)  ==========")
+    if title == nil then return nil end
+    local sections, current = {}, {}
+    local all = lines(message)
+    for i = 2, #all do
+        if all[i] == "" then
+            if #current > 0 then table.insert(sections, current) end
+            current = {}
+        else
+            table.insert(current, all[i])
+        end
+    end
+    if #current > 0 then table.insert(sections, current) end
+    return { title = title, sections = sections }
+end
+
+local function isLossMessage(message)
+    return message:find(" %- credited to ") ~= nil or message:find(" %- no credit$") ~= nil
+end
+
+local function createWindow()
+    local DialogLoader = require("DialogLoader")
+    local dxgui = require("dxgui")
+    window = DialogLoader.spawnDialogFromFile("./Scripts/UI/ImportantNoticeDialog.dlg",
+        { title = "Mission summary", dontShowUntilNextUpdate = "" })
+    templates = window.templateWidgets
+    window.cbDontShow:setVisible(false)
+    window.onClose = function() window:setVisible(false) end
+
+    local screenW, screenH = dxgui.GetWindowSize()
+    local w, h = math.min(1100, screenW - 40), math.min(620, screenH - 40)
+    window:setSize(w, h)
+    window:setPosition((screenW - w) / 2, (screenH - h) / 2)
+    window.contentScroll:setSize(w - 30, h - 80)
+end
+
+local function showWindow(summary)
+    if window == nil then createWindow() end
+    pcall(function() window:setText(summary.title) end)
+
+    local scroll = window.contentScroll
+    scroll:removeAllWidgets()
+    local y = 10
+    local function add(template, text, fit)
+        local widget = template:clone()
+        scroll:insertWidget(widget)
+        widget:setPosition(0, y)
+        widget:setText(text)
+        if fit then widget:setSize(widget:calcSize()) end
+        local _, height = widget:getSize()
+        y = y + height + 8
+    end
+
+    -- First section (subtitle, time) and a trailing footer as headings; the
+    -- tally and the per-aircraft list as plain text.
+    local count = #summary.sections
+    for i, section in ipairs(summary.sections) do
+        local heading = i == 1 or (i == count and count > 2)
+        if heading then
+            for _, line in ipairs(section) do add(templates.titleText, line, false) end
+        else
+            add(templates.paragraphText, table.concat(section, "\n"), true)
+        end
+    end
+    window:setVisible(true)
+end
+
+local function hideWindow()
+    if window then window:setVisible(false) end
+end
+
+local function writeDebriefing(text)
+    local okWrite, err = pcall(SimAPI.writeDebriefing, text)
+    if not okWrite then logError("writeDebriefing failed: " .. tostring(err)) end
+end
+
+local function appendHistory(text)
+    local path = lfs.writedir() .. "Logs\\LossTracker.log"
+    local file = io.open(path, "a")
+    if file == nil then
+        logError("can't open " .. path)
+        return
+    end
+    local mission = "?"
+    pcall(function() mission = SimAPI.getMissionName() end)
+    file:write(os.date("%Y-%m-%d %H:%M:%S"), "  ", mission, "\n", text, "\n\n")
+    file:close()
+end
+
+-- Tell the tracker (single player only: in multiplayer it runs on the server,
+-- whose players may not have this hook) that a window will show summaries.
+local function tellMission()
+    local code = "if LossTracker then LossTracker.hookPresent = true return 'ok' end return 'no'"
+    if type(a_do_script) == "function" then
+        local okCall, result = pcall(a_do_script, code)
+        if okCall and result == "ok" then return true end
+    end
+    return false
+end
+
+function hook.onTriggerMessage(message, duration, clearView)
+    if type(message) ~= "string" then return end
+    local summary = parseSummary(message)
+    if summary then
+        local okShow, err = pcall(showWindow, summary)
+        if not okShow then logError("window failed: " .. tostring(err)) end
+        writeDebriefing(message)
+        appendHistory(message)
+    elseif isLossMessage(message) then
+        writeDebriefing("LossTracker: " .. message)
+    end
+end
+
+function hook.onSimulationFrame()
+    if missionTold then return end
+    local now = SimAPI.getModelTime()
+    if now < nextTellTime then return end
+    nextTellTime = now + 5
+    if SimAPI.isMultiplayer() then
+        missionTold = true
+        return
+    end
+    missionTold = tellMission()
+end
+
+function hook.onSimulationStart()
+    missionTold, nextTellTime = false, 0
+end
+
+function hook.onSimulationStop()
+    hideWindow()
+end
+
+hook._test = { parseSummary = parseSummary, isLossMessage = isLossMessage }
+
+SimAPI.setUserCallbacks(hook)
+logInfo("hook loaded")
+LossTrackerGameGUI = hook
+
+end)
+
+if not ok then
+    log.write("LossTracker", log.ERROR, "hook failed to load: " .. tostring(loadError))
+end

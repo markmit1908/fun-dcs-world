@@ -436,6 +436,9 @@ function LT.showSplash(title, subtitle, footer, duration)
         table.insert(lines, footer)
     end
     local text = table.concat(lines, "\n")
+    -- With LossTrackerGameGUI.lua installed the summary appears in a window,
+    -- so the text only needs to reach the hook (via onTriggerMessage).
+    if LT.hookPresent then duration = 2 end
     trigger.action.outTextForCoalition(LT.playerSide, text, duration, true)
     log(text)
 end
