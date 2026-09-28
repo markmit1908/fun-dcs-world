@@ -91,3 +91,48 @@ function a_do_script(code)
     table.insert(GuiMock.doScripts, code)
     return GuiMock.trackerLoaded and "ok" or "no"
 end
+
+-- Extra widget methods used by the debrief panel.
+function Widget:setBounds(x, y, w, h) self.x, self.y, self.w, self.h = x, y, w, h end
+function Widget:getBounds() return self.x, self.y, self.w, self.h end
+function Widget:getSkin() return self.skin end
+function Widget:setSkin(skin) self.skin = skin end
+
+package.preload["Panel"] = function()
+    return { new = function(text) return newWidget("Panel", text) end }
+end
+package.preload["Static"] = function()
+    return { new = function(text) local w = newWidget("Static"); w.text = text or ""; return w end }
+end
+
+-- A stand-in for DCS's 'debriefing' module (Scripts/UI/debriefing.lua):
+-- window_ is a local reached only as an upvalue of isVisible(), as in DCS.
+function GuiMock.installDebriefing(createNow)
+    local window_
+    local debriefing = {}
+    function debriefing.create()
+        window_ = newWidget("Window", "sim_debrief")
+        window_.visible = false
+        local main = newWidget("Panel", "containerMain")
+        main.pTop = newWidget("Panel", "pTop")
+        main.pDown = newWidget("Panel", "pDown")
+        main.pDown.btnExit = newWidget("Button", "btnExit")
+        main.pGrid = newWidget("Panel", "pGrid")
+        main.pGrid:setBounds(0, 349, 1280, 378)
+        main.pGrid.skin = "gridPanelSkin"
+        main.pNoVisible = newWidget("Panel", "pNoVisible")
+        main.pNoVisible.staticCell = newWidget("Static", "staticCell")
+        main.pNoVisible.staticCell.skin = "cellSkin"
+        window_.containerMain = main
+        return window_
+    end
+    function debriefing.isVisible() return window_ and window_.visible end
+    function debriefing.show(visible)
+        if not window_ then return end
+        window_.visible = visible
+    end
+    function debriefing.window() return window_ end
+    if createNow then debriefing.create() end
+    package.loaded["debriefing"] = debriefing
+    return debriefing
+end

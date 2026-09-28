@@ -214,3 +214,114 @@ def test_history_uses_mission_line(gui, tmp_path):
     history = (tmp_path / "Logs" / "LossTracker.log").read_text()
     assert "  Channel Drone Gunnery (Low)\n" in history
     assert "channel_drone_gunnery_low" not in history
+
+
+# Debrief screen panel -------------------------------------------------------
+
+
+def debrief_parts(gui):
+    debriefing = gui.lua.globals().package.loaded["debriefing"]
+    window = debriefing.window()
+    main = window.containerMain
+    top = list(main.pTop.children.values())
+    added = [w for w in main.children.values() if w.kind == "Panel"]
+    return debriefing, main, (top[0] if top else None), (added[0] if added else None)
+
+
+def report_text(panel):
+    return [w.text for w in panel.children.values()]
+
+
+def test_debrief_panel_shows_summary(gui):
+    gui.mock.installDebriefing(True)
+    gui.message(SUMMARY)
+    debriefing, main, button, panel = debrief_parts(gui)
+    debriefing.show(True)
+
+    assert button.text == "EVENT LOG" and button.visible
+    assert (button.x, button.y, button.w, button.h) == (1050, 10, 180, 30)
+    assert panel.visible and not main.pGrid.visible
+    assert (panel.x, panel.y, panel.w, panel.h) == (0, 349, 1280, 378)
+    assert panel.skin == "gridPanelSkin"
+    assert report_text(panel) == SUMMARY.splitlines()
+    assert all(c.skin == "cellSkin" for c in panel.children.values())
+    assert any("debrief panel installed" in e.message for e in gui.mock.log.values())
+
+
+def test_debrief_button_toggles_event_log(gui):
+    gui.mock.installDebriefing(True)
+    gui.message(SUMMARY)
+    debriefing, main, button, panel = debrief_parts(gui)
+    button.onChange()
+    assert main.pGrid.visible and not panel.visible
+    assert button.text == "LOSS TRACKER"
+    button.onChange()
+    assert panel.visible and not main.pGrid.visible
+
+
+def test_debrief_panel_added_when_created_later(gui):
+    debriefing = gui.mock.installDebriefing(False)
+    gui.message(SUMMARY)  # patches the module; no window yet
+    debriefing.create()
+    debriefing.show(True)
+    _, _, button, panel = debrief_parts(gui)
+    assert button.visible
+    assert report_text(panel)[0] == "==========  MISSION COMPLETE  =========="
+
+
+def test_debrief_panel_built_once(gui):
+    gui.mock.installDebriefing(True)
+    gui.message(SUMMARY)
+    debriefing, main, _, _ = debrief_parts(gui)
+    debriefing.show(True)
+    debriefing.show(False)
+    debriefing.show(True)
+    assert len(main.pTop.children) == 1
+    assert len([w for w in main.children.values() if w.kind == "Panel"]) == 1
+
+
+def test_debrief_losses_without_summary(gui):
+    gui.mock.installDebriefing(True)
+    gui.message(LOSS)
+    gui.hook.onSimulationStop()
+    _, _, button, panel = debrief_parts(gui)
+    assert button.visible
+    text = report_text(panel)
+    assert text[1] == "No end-of-mission summary: the mission ended early."
+    assert text[-1] == "  " + LOSS
+
+
+def test_debrief_hidden_without_data(gui):
+    gui.mock.installDebriefing(True)
+    gui.hook.onSimulationStop()
+    debriefing, main, button, panel = debrief_parts(gui)
+    debriefing.show(True)
+    assert button.visible is False
+    assert main.pGrid.visible and not panel.visible
+
+
+def test_debrief_cleared_on_new_mission(gui):
+    gui.mock.installDebriefing(True)
+    gui.message(SUMMARY)
+    gui.hook.onSimulationStart()
+    _, main, button, _ = debrief_parts(gui)
+    assert button.visible is False
+    assert main.pGrid.visible
+
+
+def test_debrief_long_report_truncated(gui):
+    gui.mock.installDebriefing(True)
+    many = SUMMARY + "\n" + "\n".join(f"  line {i}" for i in range(40))
+    gui.message(many)
+    _, _, _, panel = debrief_parts(gui)
+    text = report_text(panel)
+    assert len(text) == (378 - 16) // 20
+    assert text[-1].startswith("... the rest is in the event log")
+
+
+def test_debrief_layout_change_is_logged_not_raised(gui):
+    gui.mock.installDebriefing(True)
+    gui.lua.execute('package.loaded["debriefing"].window().containerMain.pDown = nil')
+    gui.message(SUMMARY)
+    assert any("debrief panel failed" in e for e in gui.errors())
+    assert gui.window.visible  # summary window still shown

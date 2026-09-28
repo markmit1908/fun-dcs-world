@@ -746,3 +746,72 @@ def test_mission_name_defaults_to_sortie_text(tmp_path):
 
     kept = add_loss_tracker(dcs.Mission(Caucasus()), LossTrackerConfig(mission_name="Custom"))
     assert kept.mission_name == "Custom"
+
+
+# Mission goals -----------------------------------------------------------------
+
+
+def test_score_flag_counts_credited_losses(sim):
+    second = sim.unit("Fighter")
+    third = sim.unit("Fighter 2")
+    sim.start()
+    flag = sim.config.score_flag
+    sim.hit(sim.player, sim.bandit)
+    sim.kill(sim.player, sim.bandit)
+    assert sim.mock.flags[flag] == 1
+    sim.crash(second)  # no hit: no credit
+    sim.advance()
+    assert sim.mock.flags[flag] == 1
+    sim.hit(sim.player, third)
+    sim.land(third)
+    sim.advance()
+    assert sim.mock.flags[flag] == 2
+
+
+def gunnery_like_mission(fighters=2):
+    import dcs
+    from dcs import planes
+    from dcs.mapping import Point
+    from dcs.terrain import Caucasus
+
+    mission = dcs.Mission(Caucasus())
+    red = mission.coalition["red"].countries["Russia"]
+    blue = mission.coalition["blue"].countries["USA"]
+    point = Point(0, 0, mission.terrain)
+    mission.flight_group_inflight(red, "Bomber", planes.Tu_22M3, point, 5000)
+    mission.flight_group_inflight(red, "Fighters", planes.MiG_29A, point, 5000, group_size=fighters)
+    mission.flight_group_inflight(blue, "Player", planes.F_15C, point, 5000)
+    return mission
+
+
+def test_goals_give_percentage_of_enemy_aircraft():
+    mission = gunnery_like_mission()
+    add_loss_tracker(mission)
+    blue = mission.goals.goals["blue"]
+    assert [g.score for g in blue] == [33, 67, 100]
+    assert [(g.rules[0].flag, g.rules[0].value) for g in blue] == [(9002, 1), (9002, 2), (9002, 3)]
+    assert all(g.side == "BLUE" for g in blue)
+    assert mission.goals.goals["red"] == []
+
+
+def test_goals_for_red_player():
+    mission = gunnery_like_mission(fighters=1)
+    add_loss_tracker(mission, LossTrackerConfig(player_coalition="red"))
+    assert [g.score for g in mission.goals.goals["red"]] == [100]
+
+
+def test_goals_disabled():
+    mission = gunnery_like_mission()
+    add_loss_tracker(mission, LossTrackerConfig(mission_goals=False))
+    assert mission.goals.goals["blue"] == []
+
+
+def test_goals_saved_in_miz(tmp_path):
+    mission = gunnery_like_mission()
+    add_loss_tracker(mission)
+    path = tmp_path / "goals.miz"
+    mission.save(str(path))
+    with zipfile.ZipFile(path) as miz:
+        text = miz.read("mission").decode()
+    assert "c_flag_equals(9002, 3)" in text
+    assert "a_set_mission_result(100)" in text

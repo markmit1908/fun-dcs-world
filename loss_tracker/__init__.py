@@ -24,7 +24,7 @@ from typing import List, Optional
 import tempfile
 
 import dcs
-from dcs import action, condition, triggers
+from dcs import action, condition, goals, triggers
 
 LUA_SCRIPT = Path(__file__).resolve().with_name("loss_tracker.lua")
 
@@ -76,6 +76,12 @@ class LossTrackerConfig:
     end_mission_delay_s: float = 30.0
     end_flag: int = 9001
 
+    # Mission goals: the debrief's mission result becomes the percentage of
+    # enemy aircraft credited to the player's coalition. The tracker keeps
+    # that count in score_flag; add_loss_tracker() adds one goal per count.
+    mission_goals: bool = True
+    score_flag: int = 9002
+
     def __post_init__(self):
         if self.player_coalition not in ("blue", "red"):
             raise ValueError(
@@ -122,7 +128,8 @@ def add_loss_tracker(
     the tracker sets ``config.end_flag``. Returns the config used.
 
     Call it after setting the mission's sortie text, which becomes
-    ``mission_name`` unless the config sets one.
+    ``mission_name`` unless the config sets one, and after adding the enemy
+    aircraft, which the mission goals are sized from.
 
     The config is baked into the script file rather than passed through a
     DO SCRIPT action: DCS failed to resolve the DO SCRIPT's dictionary text in
@@ -150,4 +157,35 @@ def add_loss_tracker(
         end.add_action(action.EndMission())
         mission.triggerrules.triggers.append(end)
 
+    if config.mission_goals:
+        add_score_goals(mission, config)
+
     return config
+
+
+def enemy_aircraft_count(mission: dcs.Mission, player_coalition: str) -> int:
+    """Number of airplane and helicopter units on the coalition opposing the player."""
+    enemy = "red" if player_coalition == "blue" else "blue"
+    return sum(
+        len(group.units)
+        for country in mission.coalition[enemy].countries.values()
+        for group in country.plane_group + country.helicopter_group
+    )
+
+
+def add_score_goals(mission: dcs.Mission, config: LossTrackerConfig) -> int:
+    """
+    Add one player-side goal per possible credited-loss count, so the
+    debrief's mission result reads as the percentage of enemy aircraft lost.
+
+    Each goal tests score_flag == k rather than >= k, so exactly one is true
+    at a time whether DCS sums goal scores or takes the last one set.
+    Returns the number of goals added (the enemy aircraft count).
+    """
+    total = enemy_aircraft_count(mission, config.player_coalition)
+    add = mission.goals.add_blue if config.player_coalition == "blue" else mission.goals.add_red
+    for k in range(1, total + 1):
+        g = goals.Goal(comment=f"Loss tracker: {k} of {total} enemy aircraft", score=round(100 * k / total))
+        g.rules.append(condition.FlagEquals(config.score_flag, k))
+        add(g)
+    return total

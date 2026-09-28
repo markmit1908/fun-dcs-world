@@ -115,6 +115,11 @@ A full-screen summary lists every enemy aircraft with the time of its loss, how 
 
 With the hook `loss_tracker/LossTrackerGameGUI.lua` installed (see above), the summary opens in a real window with a close button, built from DCS's own notice dialog. In single player the simulation pauses until you close it; the 30-second countdown to the end of the mission resumes after that. The hook also writes every loss and summary into the mission's debriefing log, where each line appears as a "comment" row in the debrief screen's event list (filter the list by the **comment** event type to see just those), and appends each summary to `Saved Games\DCS\Logs\LossTracker.log`, named by the mission's title (`LossTrackerConfig.mission_name`, which defaults to the sortie text; DCS itself only knows the running copy as `tempMission`). Without the hook the summary is a full-screen text message. Mission scripts can't draw windows or write files, which is why this part is a separate hook.
 
+On the debrief screen after the mission:
+
+- The **Result** box shows the percentage of enemy aircraft credited to your side (for example 67 for 2 of 3). This uses DCS mission goals: the tracker counts credited losses in flag 9002, and `add_loss_tracker` adds one goal per count. Call it after adding the enemy aircraft. Turn it off with `mission_goals=False`.
+- With the hook installed, a **LOSS TRACKER** button in the top bar swaps the event list for the full report, and back again. The debrief opens on the report. DCS has no API for this: the hook reaches into DCS's own debrief script, so a DCS update could stop the button from appearing. If that happens the debrief works as normal and `dcs.log` says why.
+
 In multiplayer, losing one of several pilots shows "<name> DOWN" instead of MISSION FAILED. DCS has no per-round event for guns, so rounds come from the shooter's ammo count at each kill. Rearming and respawning are allowed for. The summary is also written to `Saved Games\DCS\Logs\dcs.log` on `LossTracker:` lines.
 
 ```python

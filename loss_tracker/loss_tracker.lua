@@ -30,6 +30,8 @@ local defaults = {
     end_mission_when_out_of_ammo = true,
     end_mission_delay_s = 30,
     end_flag = 9001,
+    mission_goals = true,
+    score_flag = 9002,
 }
 
 local cfg = {}
@@ -44,6 +46,7 @@ LossTracker = {
     shooters = {},
     hadAmmo = {},
     losses = 0,
+    credited = 0,
     allLost = false,
     endScheduled = false,
     startTime = timer.getTime(),
@@ -233,6 +236,11 @@ function LT.resolve(state, reason, attacker)
         attacker = nil
     end
     state.creditedTo = attacker
+    if attacker then
+        -- Mission goals turn this count into the debrief's mission result.
+        LT.credited = LT.credited + 1
+        trigger.action.setUserFlag(cfg.score_flag, LT.credited)
+    end
     LT.losses = LT.losses + 1
     state.lossNumber = LT.losses
     state.lostAt = timer.getTime() - LT.startTime
