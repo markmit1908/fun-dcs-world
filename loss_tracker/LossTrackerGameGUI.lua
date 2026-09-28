@@ -8,10 +8,13 @@ mission scripts. It:
 - shows the tracker's MISSION COMPLETE / OUT OF AMMO / MISSION FAILED summary
   in a real centred window (reusing DCS's own ImportantNoticeDialog layout),
   pausing single-player missions until the window is closed,
-- writes each loss and every summary line into the mission's debriefing file,
-  where they appear as "comment" rows in the debrief screen's event list,
-- appends every summary to Saved Games\DCS\Logs\LossTracker.log,
-- adds a LOSS TRACKER report to the post-mission debrief screen.
+- writes each loss and every summary line into the mission's debriefing log
+  as "comment" events (one per line),
+- appends every summary to Saved Games\DCS\Logs\LossTracker.log.
+
+The post-mission debrief is DCS's web-based main menu, which can't be
+extended; the mission result there comes from the mission goals that
+add_loss_tracker() adds.
 
 The tracker's on-screen messages arrive through onTriggerMessage, so no
 unsafe APIs are needed. In single player the hook also tells the tracker it is
@@ -136,8 +139,8 @@ local function writeDebriefing(text)
     if not okWrite then logError("writeDebriefing failed: " .. tostring(err)) end
 end
 
--- Each writeDebriefing() call becomes a "comment" row in the debrief
--- screen's event list, whose rows are one line high, so write one per line.
+-- Each writeDebriefing() call becomes one "comment" event in the debriefing
+-- log. Debrief event lists show one line per event, so write one per line.
 local function writeDebriefingLines(text)
     for _, line in ipairs(lines(text)) do
         local trimmed = line:match("^%s*(.-)%s*$")
@@ -161,185 +164,6 @@ local function appendHistory(text)
     end
     file:write(os.date("%Y-%m-%d %H:%M:%S"), "  ", mission, "\n", text, "\n\n")
     file:close()
-end
-
--- Debrief screen panel --------------------------------------------------------
--- DCS draws the post-mission debrief with Scripts/UI/debriefing.lua (the
--- 'debriefing' module in this Lua state). There's no API for adding to it, so
--- this reaches into that module: a LOSS TRACKER button in the empty right-hand
--- part of the top bar swaps the event grid for the report. All of it is
--- guarded; if a DCS update changes the module, the debrief opens as normal and
--- the error goes to dcs.log.
-
-local report = { summary = nil, losses = {} }
-local panel = {}
-local REPORT_LINE_HEIGHT = 20
-
-local function reportLines()
-    if report.summary then return lines(report.summary) end
-    if #report.losses == 0 then return nil end
-    local result = { "Loss tracker", "No end-of-mission summary: the mission ended early.", "", "Losses:" }
-    for _, loss in ipairs(report.losses) do table.insert(result, "  " .. loss) end
-    return result
-end
-
-local function debriefWindow(debriefing)
-    if type(debriefing.isVisible) ~= "function" then return nil end
-    for i = 1, 50 do
-        local name, value = debug.getupvalue(debriefing.isVisible, i)
-        if name == nil then return nil end
-        if name == "window_" then return value end
-    end
-    return nil
-end
-
-local function setReportVisible(visible)
-    panel.report:setVisible(visible)
-    panel.grid:setVisible(not visible)
-    panel.button:setText(visible and "EVENT LOG" or "LOSS TRACKER")
-    panel.showingReport = visible
-end
-
-local function buildPanel(window)
-    local Panel = require("Panel")
-    local main = window.containerMain
-    local button = main.pDown.btnExit:clone()
-    main.pTop:insertWidget(button)
-    button:setBounds(1050, 10, 180, 30)
-    button.onChange = function() setReportVisible(not panel.showingReport) end
-
-    local reportPanel = Panel.new()
-    reportPanel:setSkin(main.pGrid:getSkin())
-    reportPanel:setBounds(main.pGrid:getBounds())
-    main:insertWidget(reportPanel)
-
-    panel = {
-        window = window,
-        button = button,
-        report = reportPanel,
-        grid = main.pGrid,
-        cellSkin = main.pNoVisible.staticCell:getSkin(),
-        showingReport = false,
-    }
-end
-
-local function updateDebriefPanel(debriefing)
-    local window = debriefWindow(debriefing)
-    if window == nil then return false end
-    if panel.window ~= window then buildPanel(window) end
-
-    local content = reportLines()
-    panel.button:setVisible(content ~= nil)
-    if content == nil then
-        setReportVisible(false)
-        return true
-    end
-
-    local Static = require("Static")
-    local _, _, w, h = panel.report:getBounds()
-    local maxLines = math.floor((h - 16) / REPORT_LINE_HEIGHT)
-    if #content > maxLines then
-        local shown = {}
-        for i = 1, maxLines - 1 do shown[i] = content[i] end
-        shown[maxLines] = "... the rest is in the event log (filter the Event column by comment)"
-        content = shown
-    end
-
-    panel.report:removeAllWidgets()
-    for i, line in ipairs(content) do
-        local cell = Static.new(line)
-        cell:setSkin(panel.cellSkin)
-        cell:setBounds(15, 8 + (i - 1) * REPORT_LINE_HEIGHT, w - 30, REPORT_LINE_HEIGHT)
-        panel.report:insertWidget(cell)
-    end
-    setReportVisible(true)
-    return true
-end
-
-local function refreshDebrief(debriefing)
-    local okUpdate, err = pcall(updateDebriefPanel, debriefing)
-    if not okUpdate then logError("debrief panel failed: " .. tostring(err)) end
-end
-
-local function patchDebriefing()
-    local debriefing = package.loaded["debriefing"]
-    if type(debriefing) ~= "table" then return nil end
-    if debriefing.lossTrackerPatched then return debriefing end
-
-    local originalShow, originalCreate = debriefing.show, debriefing.create
-    if type(originalShow) ~= "function" then return nil end
-    debriefing.show = function(visible, ...)
-        local result = originalShow(visible, ...)
-        if visible then refreshDebrief(debriefing) end
-        return result
-    end
-    if type(originalCreate) == "function" then
-        debriefing.create = function(...)
-            local window = originalCreate(...)
-            refreshDebrief(debriefing)
-            return window
-        end
-    end
-    debriefing.lossTrackerPatched = true
-    logInfo("debrief panel installed")
-    return debriefing
-end
-
--- Called whenever there's something new to show, in case DCS calls the
--- debrief module's functions directly rather than through the patched table.
-local function syncDebrief()
-    local okPatch, debriefing = pcall(patchDebriefing)
-    if not okPatch then
-        logError("debrief patch failed: " .. tostring(debriefing))
-    elseif debriefing then
-        refreshDebrief(debriefing)
-    end
-end
-
--- DCS loads and opens the debrief after the simulation stops, when no hook
--- callback runs any more. So poll on DCS's UI update loop until the debrief
--- is visible, fill it in, then stop. Gives up (and logs what it saw) after
--- DEBRIEF_WAIT_S.
-local DEBRIEF_WAIT_S = 300
-
-local function debriefVisible()
-    local debriefing = package.loaded["debriefing"]
-    if type(debriefing) ~= "table" or type(debriefing.isVisible) ~= "function" then return false end
-    local okVisible, visible = pcall(debriefing.isVisible)
-    return okVisible and visible and true or false
-end
-
-local function watchForDebrief()
-    if reportLines() == nil then return end
-    local okRequire, UpdateManager = pcall(require, "UpdateManager")
-    if not okRequire or type(UpdateManager) ~= "table" or type(UpdateManager.add) ~= "function" then
-        logError("debrief watch unavailable: " .. tostring(UpdateManager))
-        return
-    end
-    local deadline = os.time() + DEBRIEF_WAIT_S
-    UpdateManager.add(function()
-        local okStep, done = pcall(function()
-            if debriefVisible() then
-                syncDebrief()
-                logInfo("debrief panel filled")
-                return true
-            end
-            if os.time() > deadline then
-                local debriefing = package.loaded["debriefing"]
-                logError(string.format(
-                    "debrief screen not found after %d s: package.loaded.debriefing is %s, isVisible is %s",
-                    DEBRIEF_WAIT_S, type(debriefing),
-                    type(debriefing) == "table" and type(debriefing.isVisible) or "n/a"))
-                return true
-            end
-            return false
-        end)
-        if not okStep then
-            logError("debrief watch failed: " .. tostring(done))
-            return true
-        end
-        return done
-    end)
 end
 
 -- Tell the tracker (single player only: in multiplayer it runs on the server,
@@ -366,12 +190,8 @@ function hook.onTriggerMessage(message, duration, clearView)
         end
         writeDebriefingLines(message)
         appendHistory(message)
-        report.summary = message
-        syncDebrief()
     elseif isLossMessage(message) then
         writeDebriefing("LossTracker: " .. message)
-        table.insert(report.losses, message)
-        syncDebrief()
     end
 end
 
@@ -389,21 +209,17 @@ end
 
 function hook.onSimulationStart()
     missionTold, nextTellTime = false, 0
-    report = { summary = nil, losses = {} }
-    syncDebrief()
 end
 
 function hook.onSimulationStop()
     hideWindow()
     pausedByHook = false
-    syncDebrief()
-    watchForDebrief()
 end
 
 hook._test = { parseSummary = parseSummary, isLossMessage = isLossMessage }
 
 SimAPI.setUserCallbacks(hook)
-logInfo("hook loaded (debriefing module: " .. type(package.loaded["debriefing"]) .. ")")
+logInfo("hook loaded")
 LossTrackerGameGUI = hook
 
 end)
