@@ -296,6 +296,52 @@ local function syncDebrief()
     end
 end
 
+-- DCS loads and opens the debrief after the simulation stops, when no hook
+-- callback runs any more. So poll on DCS's UI update loop until the debrief
+-- is visible, fill it in, then stop. Gives up (and logs what it saw) after
+-- DEBRIEF_WAIT_S.
+local DEBRIEF_WAIT_S = 300
+
+local function debriefVisible()
+    local debriefing = package.loaded["debriefing"]
+    if type(debriefing) ~= "table" or type(debriefing.isVisible) ~= "function" then return false end
+    local okVisible, visible = pcall(debriefing.isVisible)
+    return okVisible and visible and true or false
+end
+
+local function watchForDebrief()
+    if reportLines() == nil then return end
+    local okRequire, UpdateManager = pcall(require, "UpdateManager")
+    if not okRequire or type(UpdateManager) ~= "table" or type(UpdateManager.add) ~= "function" then
+        logError("debrief watch unavailable: " .. tostring(UpdateManager))
+        return
+    end
+    local deadline = os.time() + DEBRIEF_WAIT_S
+    UpdateManager.add(function()
+        local okStep, done = pcall(function()
+            if debriefVisible() then
+                syncDebrief()
+                logInfo("debrief panel filled")
+                return true
+            end
+            if os.time() > deadline then
+                local debriefing = package.loaded["debriefing"]
+                logError(string.format(
+                    "debrief screen not found after %d s: package.loaded.debriefing is %s, isVisible is %s",
+                    DEBRIEF_WAIT_S, type(debriefing),
+                    type(debriefing) == "table" and type(debriefing.isVisible) or "n/a"))
+                return true
+            end
+            return false
+        end)
+        if not okStep then
+            logError("debrief watch failed: " .. tostring(done))
+            return true
+        end
+        return done
+    end)
+end
+
 -- Tell the tracker (single player only: in multiplayer it runs on the server,
 -- whose players may not have this hook) that a window will show summaries.
 local function tellMission()
@@ -351,12 +397,13 @@ function hook.onSimulationStop()
     hideWindow()
     pausedByHook = false
     syncDebrief()
+    watchForDebrief()
 end
 
 hook._test = { parseSummary = parseSummary, isLossMessage = isLossMessage }
 
 SimAPI.setUserCallbacks(hook)
-logInfo("hook loaded")
+logInfo("hook loaded (debriefing module: " .. type(package.loaded["debriefing"]) .. ")")
 LossTrackerGameGUI = hook
 
 end)

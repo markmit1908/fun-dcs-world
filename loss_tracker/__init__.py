@@ -179,13 +179,20 @@ def add_score_goals(mission: dcs.Mission, config: LossTrackerConfig) -> int:
     debrief's mission result reads as the percentage of enemy aircraft lost.
 
     Each goal tests score_flag == k rather than >= k, so exactly one is true
-    at a time whether DCS sums goal scores or takes the last one set.
-    Returns the number of goals added (the enemy aircraft count).
+    at a time (DCS adds up the scores of all true goals).
+
+    Goals go to OFFLINE, which is what single player uses (DCS's own
+    single-player missions put theirs there; BLUE/RED goals were ignored in
+    a single-player test), and to the player's coalition for multiplayer.
+    Returns the enemy aircraft count.
     """
     total = enemy_aircraft_count(mission, config.player_coalition)
-    add = mission.goals.add_blue if config.player_coalition == "blue" else mission.goals.add_red
-    for k in range(1, total + 1):
-        g = goals.Goal(comment=f"Loss tracker: {k} of {total} enemy aircraft", score=round(100 * k / total))
-        g.rules.append(condition.FlagEquals(config.score_flag, k))
-        add(g)
+    add_side = mission.goals.add_blue if config.player_coalition == "blue" else mission.goals.add_red
+    for add in (mission.goals.add_offline, add_side):
+        for k in range(1, total + 1):
+            g = goals.Goal(
+                comment=f"Loss tracker: {k} of {total} enemy aircraft", score=round(100 * k / total)
+            )
+            g.rules.append(condition.FlagEquals(config.score_flag, k))
+            add(g)
     return total

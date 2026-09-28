@@ -136,3 +136,22 @@ function GuiMock.installDebriefing(createNow)
     package.loaded["debriefing"] = debriefing
     return debriefing
 end
+
+-- DCS's per-frame UI updater: functions run each frame until they return true.
+GuiMock.updaters = {}
+package.preload["UpdateManager"] = function()
+    return { add = function(fn) table.insert(GuiMock.updaters, fn) end }
+end
+function GuiMock.runFrames(count)
+    for _ = 1, count do
+        local remaining = {}
+        for _, fn in ipairs(GuiMock.updaters) do
+            if not fn() then table.insert(remaining, fn) end
+        end
+        GuiMock.updaters = remaining
+    end
+end
+
+-- Wall clock for the hook's give-up timer.
+GuiMock.clock = 1000
+os.time = function() return GuiMock.clock end

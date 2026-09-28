@@ -792,18 +792,25 @@ def test_goals_give_percentage_of_enemy_aircraft():
     assert [(g.rules[0].flag, g.rules[0].value) for g in blue] == [(9002, 1), (9002, 2), (9002, 3)]
     assert all(g.side == "BLUE" for g in blue)
     assert mission.goals.goals["red"] == []
+    # Single player uses OFFLINE goals.
+    offline = mission.goals.goals["offline"]
+    assert [g.score for g in offline] == [33, 67, 100]
+    assert all(g.side == "OFFLINE" for g in offline)
 
 
 def test_goals_for_red_player():
     mission = gunnery_like_mission(fighters=1)
     add_loss_tracker(mission, LossTrackerConfig(player_coalition="red"))
     assert [g.score for g in mission.goals.goals["red"]] == [100]
+    assert [g.score for g in mission.goals.goals["offline"]] == [100]
+    assert mission.goals.goals["blue"] == []
 
 
 def test_goals_disabled():
     mission = gunnery_like_mission()
     add_loss_tracker(mission, LossTrackerConfig(mission_goals=False))
     assert mission.goals.goals["blue"] == []
+    assert mission.goals.goals["offline"] == []
 
 
 def test_goals_saved_in_miz(tmp_path):
@@ -815,3 +822,5 @@ def test_goals_saved_in_miz(tmp_path):
         text = miz.read("mission").decode()
     assert "c_flag_equals(9002, 3)" in text
     assert "a_set_mission_result(100)" in text
+    assert "mission.result.offline.conditions[3]()" in text
+    assert "mission.result.blue.conditions[3]()" in text

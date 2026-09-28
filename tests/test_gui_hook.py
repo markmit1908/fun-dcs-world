@@ -325,3 +325,41 @@ def test_debrief_layout_change_is_logged_not_raised(gui):
     gui.message(SUMMARY)
     assert any("debrief panel failed" in e for e in gui.errors())
     assert gui.window.visible  # summary window still shown
+
+
+def test_debrief_filled_when_it_opens_after_stop(gui):
+    # DCS loads and opens the debrief only after the simulation stops.
+    gui.message(SUMMARY)
+    gui.hook.onSimulationStop()
+    assert len(gui.mock.updaters) == 1
+    gui.mock.runFrames(3)  # no debrief module yet: keep waiting
+    assert len(gui.mock.updaters) == 1
+
+    debriefing = gui.mock.installDebriefing(True)
+    gui.mock.runFrames(2)  # created but not visible yet
+    assert len(gui.mock.updaters) == 1
+    debriefing.show(True)
+    gui.mock.runFrames(1)
+    assert len(gui.mock.updaters) == 0
+    _, main, button, panel = debrief_parts(gui)
+    assert button.visible and panel.visible and not main.pGrid.visible
+    assert report_text(panel)[0] == "==========  MISSION COMPLETE  =========="
+
+
+def test_debrief_watch_gives_up_and_logs(gui):
+    gui.message(SUMMARY)
+    gui.hook.onSimulationStop()
+    gui.mock.clock = gui.mock.clock + 301
+    gui.mock.runFrames(1)
+    assert len(gui.mock.updaters) == 0
+    assert any("debrief screen not found after 300 s: package.loaded.debriefing is nil" in e
+               for e in gui.errors())
+
+
+def test_no_debrief_watch_without_data(gui):
+    gui.hook.onSimulationStop()
+    assert len(gui.mock.updaters) == 0
+
+
+def test_load_logs_debriefing_state(gui):
+    assert any("hook loaded (debriefing module: nil)" in e.message for e in gui.mock.log.values())
