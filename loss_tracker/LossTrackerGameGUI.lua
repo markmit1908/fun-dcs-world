@@ -62,7 +62,10 @@ local function parseSummary(message)
     return { title = title, sections = sections }
 end
 
+-- Loss messages are one line. The live status block repeats recent losses,
+-- so a multi-line message containing one must not count as a loss.
 local function isLossMessage(message)
+    if message:find("\n") then return false end
     return message:find(" %- credited to ") ~= nil or message:find(" %- no credit$") ~= nil
 end
 

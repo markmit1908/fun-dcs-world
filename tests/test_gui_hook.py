@@ -125,6 +125,15 @@ def test_loss_messages_go_to_debriefing_only(gui, tmp_path):
     assert not (tmp_path / "Logs" / "LossTracker.log").exists()
 
 
+def test_status_block_is_not_a_loss(gui):
+    # The live status block repeats the latest loss line every second.
+    status = "Rounds fired: 772\nKills: 1\nRate: 772 rounds/kill\nScore: 1 of 3 enemy aircraft (33%)\n\n" + LOSS
+    for _ in range(5):
+        gui.message(status, 2, True)
+    assert gui.debriefing() == []
+    assert gui.window is None
+
+
 def test_other_messages_ignored(gui):
     gui.message("Welcome to the Channel")
     gui.message("Enemy aircraft lost: 0 of 3\n  Narj: 0")
