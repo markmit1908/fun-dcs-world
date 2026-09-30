@@ -36,7 +36,7 @@ Options: `--output`, `--detail-regions`, `--bounds-overrides`, `--no-airports`, 
 ## Channel drone gunnery mission
 
 ```bash
-python channel_drone_gunnery.py    # write all four mission files
+python channel_drone_gunnery.py    # write all ten mission files
 ```
 
 | File | Target formations |
@@ -45,8 +45,12 @@ python channel_drone_gunnery.py    # write all four mission files
 | `channel_drone_gunnery_low.miz` | 5,000 ft only |
 | `channel_drone_gunnery_medium.miz` | 12,000 ft only |
 | `channel_drone_gunnery_high.miz` | 20,000 ft only |
+| `channel_drone_gunnery_evasive_ju88_{average,good,excellent}.miz` | One evasive, unarmed Ju 88 at 5,000 ft |
+| `channel_drone_gunnery_evasive_bf109_{average,good,excellent}.miz` | One evasive, unarmed Bf 109 at 5,000 ft |
 
-The player start is the same in all four.
+The player start is the same in all of them.
+
+In the evasive missions a single target flies the low racetrack on its own. It has no ammunition (a Ju 88's gunners included) and never fires, but it takes evasive action when attacked (DCS's Evade Fire reaction) and then returns to its racetrack. It won't break off for home: returning to base when out of ammo or low on fuel is switched off. The file name gives the AI skill, which controls how hard it evades.
 
 You fly a Spitfire LF Mk IX, starting in the air at 6,000 ft about 2 miles south of the target lane over the Strait of Dover. Three German formations fly a racetrack between 50°50'07"N 1°10'40"E and 51°07'44"N 1°35'53"E. Each formation is one Ju 88 leading two Bf 109 K-4s, flying at 5,000, 12,000 and 20,000 ft. The targets have no ammunition, are set to Weapon Hold and don't react to threats.
 

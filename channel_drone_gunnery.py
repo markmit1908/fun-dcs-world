@@ -33,13 +33,18 @@ Output (same player start in each; see VARIANTS):
     channel_drone_gunnery_low.miz     low band only
     channel_drone_gunnery_medium.miz  medium band only
     channel_drone_gunnery_high.miz    high band only
+    channel_drone_gunnery_evasive_{ju88,bf109}_{average,good,excellent}.miz
+                                      one unarmed target on the low racetrack
+                                      that evades when attacked, at that skill
 """
 
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, Tuple
 import inspect
 import logging
 import sys
@@ -88,14 +93,39 @@ BANDS = {
     "HIGH": HIGH_FT,
 }
 
-# Output file name -> target bands in that mission. The player start is the
-# same in every variant.
-VARIANTS = {
-    "channel_drone_gunnery.miz": ["LOW", "MEDIUM", "HIGH"],
-    "channel_drone_gunnery_low.miz": ["LOW"],
-    "channel_drone_gunnery_medium.miz": ["MEDIUM"],
-    "channel_drone_gunnery_high.miz": ["HIGH"],
-}
+@dataclass(frozen=True)
+class Variant:
+    """
+    One generated mission. The player start is the same in every variant.
+
+    Either passive formations (a Ju 88 leading two Bf 109s) at the given
+    bands, or a single evasive target: "ju88" or "bf109", unarmed, flying the
+    low-band racetrack and evading when attacked, at the given AI skill.
+    """
+
+    filename: str
+    bands: Tuple[str, ...] = ()
+    evasive: Optional[str] = None
+    skill: Skill = Skill.Average
+
+
+EVASIVE_TARGETS = {"ju88": "Ju-88", "bf109": "Bf-109"}
+EVASIVE_SKILLS = (Skill.Average, Skill.Good, Skill.Excellent)
+
+VARIANTS = [
+    Variant("channel_drone_gunnery.miz", bands=("LOW", "MEDIUM", "HIGH")),
+    Variant("channel_drone_gunnery_low.miz", bands=("LOW",)),
+    Variant("channel_drone_gunnery_medium.miz", bands=("MEDIUM",)),
+    Variant("channel_drone_gunnery_high.miz", bands=("HIGH",)),
+] + [
+    Variant(
+        f"channel_drone_gunnery_evasive_{target}_{skill.value.lower()}.miz",
+        evasive=target,
+        skill=skill,
+    )
+    for target in EVASIVE_TARGETS
+    for skill in EVASIVE_SKILLS
+]
 
 # Target speed. Kept moderate so a Spitfire can work the formations.
 TARGET_SPEED_KMH = 360
@@ -192,6 +222,17 @@ def quiet_dcs_install_lookup():
 # Mission helpers
 # ---------------------------------------------------------------------------
 
+def disarm(group, skill: Skill = Skill.Average):
+    """Remove guns (including a bomber's gunners), pylons and countermeasures."""
+    for unit in group.units:
+        # gun is expressed as a percentage in pydcs payload data.
+        unit.gun = 0
+        unit.pylons = {}
+        unit.chaff = 0
+        unit.flare = 0
+        unit.skill = skill
+
+
 def make_drone(group):
     """
     Make an AI aircraft group behave as a passive target.
@@ -204,14 +245,27 @@ def make_drone(group):
     first.tasks.append(
         task.OptReactOnThreat(task.OptReactOnThreat.Values.NoReaction)
     )
+    disarm(group)
 
-    for unit in group.units:
-        # gun is expressed as a percentage in pydcs payload data.
-        unit.gun = 0
-        unit.pylons = {}
-        unit.chaff = 0
-        unit.flare = 0
-        unit.skill = Skill.Average
+
+def make_evasive(group, skill: Skill):
+    """
+    Make an unarmed AI aircraft that evades when attacked but stays in the
+    area: Evade Fire (defensive manoeuvres, no abort-mission escape), and no
+    return to base for being out of ammo or low on fuel, which an unarmed AI
+    would otherwise do straight away. Options go on the first route point,
+    before the orbit task.
+    """
+    first = group.points[0]
+    first.tasks.append(task.OptROE(task.OptROE.Values.WeaponHold))
+    first.tasks.append(
+        task.OptReactOnThreat(task.OptReactOnThreat.Values.EvadeFire)
+    )
+    first.tasks.append(
+        task.OptRTBOnOutOfAmmo(task.OptRTBOnOutOfAmmo.Values.NoWeapon)
+    )
+    first.tasks.append(task.OptRTBOnBingoFuel(False))
+    disarm(group, skill)
 
 
 def configure_racetrack(group, start: Point, end: Point, altitude_m: int):
@@ -306,6 +360,35 @@ def create_target_band(
     return bomber, fighters
 
 
+def create_evasive_target(
+    mission: dcs.Mission,
+    germany,
+    plane_type,
+    name: str,
+    skill: Skill,
+    altitude_ft: int,
+    start: Point,
+    end: Point,
+):
+    """A single unarmed target flying the racetrack alone and evading when attacked."""
+    altitude_m = int(altitude_ft * FT_TO_M)
+    group = mission.flight_group_inflight(
+        germany,
+        name,
+        plane_type,
+        start,
+        altitude=altitude_m,
+        speed=TARGET_SPEED_KMH,
+        maintask=task.Nothing,
+        group_size=1,
+    )
+    make_evasive(group, skill)
+    # The type's own radio frequency, not the pydcs 251 MHz default (see create_player).
+    group.set_frequency(plane_type.radio_frequency)
+    configure_racetrack(group, start, end, altitude_m)
+    return group
+
+
 def create_player(
     mission: dcs.Mission,
     uk,
@@ -351,12 +434,12 @@ def main():
     fighter = find_plane(*FIGHTER_IDS)
     bomber = find_plane(*BOMBER_IDS)
 
-    for filename, band_names in VARIANTS.items():
-        output = OUTPUT_DIR / filename
+    for variant in VARIANTS:
+        output = OUTPUT_DIR / variant.filename
         with quiet_dcs_install_lookup():
-            build_and_save(spitfire, fighter, bomber, band_names, output)
-        bands = ", ".join(f"{name} {BANDS[name]:,} ft" for name in band_names)
-        print(f"Wrote {output} ({bands})")
+            mission = build_mission(spitfire, fighter, bomber, variant)
+            mission.save(str(output))
+        print(f"Wrote {output} ({describe(variant)})")
 
     print()
     print("Aircraft selected:")
@@ -369,7 +452,73 @@ def main():
     print("Player starts approximately 2 statute miles south of racetrack start.")
 
 
-def build_and_save(spitfire, fighter, bomber, band_names, output: Path):
+def describe(variant: Variant) -> str:
+    """Short description for the console."""
+    if variant.evasive:
+        return (
+            f"evasive {EVASIVE_TARGETS[variant.evasive]}, {variant.skill.value}, "
+            f"{BANDS['LOW']:,} ft"
+        )
+    return ", ".join(f"{name} {BANDS[name]:,} ft" for name in variant.bands)
+
+
+def set_briefing(mission: dcs.Mission, variant: Variant, tracker: LossTrackerConfig):
+    scoring = (
+        "A target counts as destroyed when it is shot down, crashes, its pilot "
+        "ejects, or it lands away from a German airfield. The top-right panel "
+        "shows your rounds fired, kills, rounds per kill and score; each kill "
+        "shows the rounds you fired for it.\n\n"
+        "Running out of ammunition shows a summary, but the mission carries on "
+        "and targets that go down afterwards still count. The mission ends "
+        f"{tracker.end_mission_delay_s:.0f} seconds after the last target is "
+        "destroyed. Use the F10 radio menu for the current tally."
+    )
+
+    if variant.evasive:
+        target = EVASIVE_TARGETS[variant.evasive]
+        mission.set_sortie_text(f"Channel Drone Gunnery (Evasive {target}, {variant.skill.value})")
+        mission.set_description_text(
+            "Air-to-air gunnery practice over The Channel.\n\n"
+            f"A single unarmed {target} flies a racetrack pattern at "
+            f"{BANDS['LOW']:,} ft. It can't shoot back, but it takes evasive "
+            "action when you attack and then returns to its racetrack. "
+            f"AI skill: {variant.skill.value}.\n\n" + scoring
+        )
+        mission.set_description_bluetask_text(
+            f"Intercept the {target} and shoot it down while it evades."
+        )
+        mission.set_description_redtask_text("Unarmed evasive target. Do not engage.")
+        return
+
+    if len(variant.bands) == len(BANDS):
+        mission.set_sortie_text("Channel Drone Gunnery")
+    else:
+        levels = " / ".join(name.title() for name in variant.bands)
+        mission.set_sortie_text(f"Channel Drone Gunnery ({levels})")
+
+    altitudes = [f"{BANDS[name]:,} ft" for name in variant.bands]
+    if len(altitudes) == 1:
+        formations = f"One German target formation flies a racetrack pattern at {altitudes[0]}.\n"
+    else:
+        formations = (
+            f"{len(altitudes)} German target formations fly racetrack patterns at "
+            f"{', '.join(altitudes[:-1])} and {altitudes[-1]}.\n"
+        )
+    mission.set_description_text(
+        "Air-to-air gunnery practice over The Channel.\n\n"
+        + formations
+        + "Each formation consists of two Bf 109 fighters following one Ju 88 bomber.\n"
+        "Targets are set to Weapon Hold and No Reaction to Threat.\n\n" + scoring
+    )
+    mission.set_description_bluetask_text(
+        "Intercept the German drone formations and practice air-to-air gunnery."
+    )
+    mission.set_description_redtask_text(
+        "Passive target aircraft. Do not engage."
+    )
+
+
+def build_mission(spitfire, fighter, bomber, variant: Variant) -> dcs.Mission:
     terrain = TheChannel()
     mission = dcs.Mission(terrain)
 
@@ -407,62 +556,41 @@ def build_and_save(spitfire, fighter, bomber, band_names, output: Path):
 
     # Mission metadata.
     mission.start_time = datetime(1944, 6, 15, 12, 0, 0)
-    if len(band_names) == len(BANDS):
-        mission.set_sortie_text("Channel Drone Gunnery")
-    else:
-        levels = " / ".join(name.title() for name in band_names)
-        mission.set_sortie_text(f"Channel Drone Gunnery ({levels})")
-
-    altitudes = [f"{BANDS[name]:,} ft" for name in band_names]
-    if len(altitudes) == 1:
-        formations = f"One German target formation flies a racetrack pattern at {altitudes[0]}.\n"
-    else:
-        formations = (
-            f"{len(altitudes)} German target formations fly racetrack patterns at "
-            f"{', '.join(altitudes[:-1])} and {altitudes[-1]}.\n"
-        )
-    mission.set_description_text(
-        "Air-to-air gunnery practice over The Channel.\n\n"
-        + formations
-        + "Each formation consists of two Bf 109 fighters following one Ju 88 bomber.\n"
-        "Targets are set to Weapon Hold and No Reaction to Threat.\n\n"
-        "A target counts as destroyed when it is shot down, crashes, its pilot "
-        "ejects, or it lands away from a German airfield. The top-right panel "
-        "shows your rounds fired, kills, rounds per kill and score; each kill "
-        "shows the rounds you fired for it.\n\n"
-        "Running out of ammunition shows a summary, but the mission carries on "
-        "and targets that go down afterwards still count. The mission ends "
-        f"{tracker.end_mission_delay_s:.0f} seconds after the last target is "
-        "destroyed. Use the F10 radio menu for the current tally."
-    )
-    mission.set_description_bluetask_text(
-        "Intercept the German drone formations and practice air-to-air gunnery."
-    )
-    mission.set_description_redtask_text(
-        "Passive target aircraft. Do not engage."
-    )
+    set_briefing(mission, variant, tracker)
 
     # Player.
     create_player(mission, uk, spitfire, player_point, start)
 
-    # Target altitude bands for this variant.
-    for name in band_names:
-        create_target_band(
+    if variant.evasive:
+        plane_type = bomber if variant.evasive == "ju88" else fighter
+        create_evasive_target(
             mission,
             germany,
-            bomber,
-            fighter,
-            name,
-            BANDS[name],
+            plane_type,
+            f"Evasive {EVASIVE_TARGETS[variant.evasive]}",
+            variant.skill,
+            BANDS["LOW"],
             start,
             end,
         )
+    else:
+        # Target altitude bands for this variant.
+        for name in variant.bands:
+            create_target_band(
+                mission,
+                germany,
+                bomber,
+                fighter,
+                name,
+                BANDS[name],
+                start,
+                end,
+            )
 
     # Extended loss scoring, and end the mission once every target is gone.
+    # After the targets and sortie text, which it reads.
     add_loss_tracker(mission, tracker)
-
-    # Save.
-    mission.save(str(output))
+    return mission
 
 
 if __name__ == "__main__":

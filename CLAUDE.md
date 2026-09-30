@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Two independent pydcs scripts, plus a reusable module:
 
 - `dcs_maps_to_kmz.py` exports every DCS World terrain known to pydcs as a KMZ for Google Earth (visual reference, not mission planning). Layers: each terrain's DCS Cartesian origin (0,0), its bounds rectangle, curated high-detail polygons, and pydcs airfields.
-- `channel_drone_gunnery.py` generates `channel_drone_gunnery.miz`, a WWII gunnery-practice mission on The Channel: a player Spitfire LF Mk IX plus three passive German formations (1 Ju-88 leading 2 Bf-109s) flying racetracks at 5k/12k/20k ft. It also writes `_low`/`_medium`/`_high` variants with a single formation each (`VARIANTS`).
+- `channel_drone_gunnery.py` generates `channel_drone_gunnery.miz`, a WWII gunnery-practice mission on The Channel: a player Spitfire LF Mk IX plus three passive German formations (1 Ju-88 leading 2 Bf-109s) flying racetracks at 5k/12k/20k ft. It also writes `_low`/`_medium`/`_high` variants with a single formation each, and `_evasive_{ju88,bf109}_{average,good,excellent}` variants with one unarmed target on the low racetrack that evades when attacked (`VARIANTS`, a list of `Variant` recipes).
 - `loss_tracker/` is a mission-generator-agnostic module. `add_loss_tracker(mission, LossTrackerConfig(...))` embeds `loss_tracker.lua`, which credits an enemy aircraft loss (kill, crash, ejection, landing away from an allied base) to the last player-coalition attacker, announces it with the rounds fired for it, and shows a full-screen summary (MISSION COMPLETE / OUT OF AMMO / MISSION FAILED). Every enemy lost sets `end_flag` after `end_mission_delay_s` (an `EndMission` trigger watches it); out of ammo only shows the summary unless `end_mission_when_out_of_ammo`. A per-pilot status block (rounds, kills, rate, score, recent losses) refreshes in the message area via `outTextForGroup(..., clearview=true)`.
 
 ## Commands
@@ -21,7 +21,7 @@ python dcs_maps_to_kmz.py --list      # origin/bounds table per terrain, "(overr
 python dcs_maps_to_kmz.py             # writes dcs_world_maps.kmz
 python dcs_maps_to_kmz.py --output out.kmz --detail-regions other.json --bounds-overrides other.json --no-airports --samples-per-edge 50
 
-python channel_drone_gunnery.py      # writes channel_drone_gunnery{,_low,_medium,_high}.miz next to the script
+python channel_drone_gunnery.py      # writes all ten channel_drone_gunnery*.miz variants next to the script
 python install_missions.py           # copies every .miz here into ~/Saved Games/DCS/Missions and the GUI hook into ../Scripts/Hooks (skips if missing; --dest, --no-hook)
 
 python -m pytest -q tests                                        # all tests
@@ -50,6 +50,8 @@ python -m pytest -q tests/test_kmz.py::test_detail_regions_inside_terrain
 - Aircraft are resolved by **exact** DCS type id (`find_plane`, called inside `main()`). No fuzzy matching, because a substring match could pick a different variant.
 - pydcs defaults Germany to blue, so the script moves it to red.
 - Targets are passive: Weapon Hold and No Reaction options go on waypoint 0 *before* the Orbit/Follow task. They also get `gun = 0` and empty pylons. The bomber flies a `Race-Track` orbit from its spawn point to the `end` waypoint, and the fighters `Follow` the bomber's group id.
+- Evasive targets (`make_evasive`): Weapon Hold, React to Threat = Evade Fire (not Allow Abort Mission, so they don't run for home), RTB on out of ammo = NoWeapon and RTB on bingo fuel = false (an unarmed AI otherwise heads home at once), plus `disarm()` and the chosen skill. Options go on waypoint 0 before the orbit, as for the passive drones.
+- `build_mission()` returns the mission without saving so tests can inspect it (`tests/test_channel_drone_gunnery.py`).
 - Offsets are computed geodesically with `pyproj.Geod`, then converted with `Point.from_latlng`.
 - `quiet_dcs_install_lookup()` hides pydcs's DCS-install probing noise off Windows. That noise is a `pydcs` logger error plus a bare stderr `print`, once per group.
 - The player group and fighters use their aircraft type's `radio_frequency`; pydcs's 251 MHz group default is invalid for WWII radios and DCS rejects it for the player.
