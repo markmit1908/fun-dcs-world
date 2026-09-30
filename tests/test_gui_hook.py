@@ -16,12 +16,12 @@ Time: 14 min 43 s
 
 Enemy aircraft lost: 2 of 2
   Narj: 2 (500 rounds fired, 250 per kill)
-  5:00  LOW Bomber Pilot #1 (Ju-88A4): shot down - Narj (300 rounds, 300 fired so far)
-  8:20  LOW Fighters Pilot #1 (Bf-109K-4): shot down - Narj (200 rounds, 500 fired so far)
+  5:00  LOW Bomber Pilot #1 (Ju-88A4): shot down - Narj (300 rounds, 300 fired so far, 300 per kill)
+  8:20  LOW Fighters Pilot #1 (Bf-109K-4): shot down - Narj (200 rounds, 500 fired so far, 250 per kill)
 
 Mission ends in 30 seconds"""
 
-LOSS = "Ju-88A4 (LOW Bomber Pilot #1) shot down - credited to Narj (300 rounds, 300 fired so far)"
+LOSS = "Ju-88A4 (LOW Bomber Pilot #1) shot down - credited to Narj (300 rounds, 300 fired so far, 300 per kill)"
 
 
 class Gui:

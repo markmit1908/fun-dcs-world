@@ -26,8 +26,10 @@ local defaults = {
     poll_interval_s = 5,
     message_duration_s = 10,
     summary_duration_s = 60,
+    status_enabled = true,
+    status_interval_s = 1,
     end_mission_when_all_lost = true,
-    end_mission_when_out_of_ammo = true,
+    end_mission_when_out_of_ammo = false,
     end_mission_delay_s = 30,
     end_flag = 9001,
     mission_goals = true,
@@ -47,6 +49,9 @@ LossTracker = {
     hadAmmo = {},
     losses = 0,
     credited = 0,
+    kills = {},
+    recent = {},
+    statusStopped = false,
     allLost = false,
     endScheduled = false,
     startTime = timer.getTime(),
@@ -206,9 +211,14 @@ local function clock(seconds)
     return string.format("%d:%02d", math.floor(seconds / 60), math.floor(seconds % 60))
 end
 
+local function round(x) return math.floor(x + 0.5) end
+
+-- rounds for this kill, total so far, and total / kills so far (the
+-- effective rate at the moment of this kill).
 local function roundsText(state)
     if state.rounds == nil then return "" end
-    return string.format(" (%d rounds, %d fired so far)", state.rounds, state.roundsTotal)
+    return string.format(" (%d rounds, %d fired so far, %d per kill)",
+        state.rounds, state.roundsTotal, state.rate)
 end
 
 function LT.nearAlliedBase(side, point)
@@ -252,7 +262,9 @@ function LT.resolve(state, reason, attacker)
         state.roundsTotal = fired
         shooter.atLastKill = fired
         shooter.kills = shooter.kills + 1
+        state.rate = round(fired / shooter.kills)
     end
+    if attacker then LT.kills[attacker] = (LT.kills[attacker] or 0) + 1 end
 
     local message = string.format("%s (%s) %s", state.type, state.name, REASON_TEXT[reason] or reason)
     if attacker then
@@ -262,6 +274,8 @@ function LT.resolve(state, reason, attacker)
     end
     tell(message)
     log(message)
+    -- The status block replaces the message area, so it repeats this.
+    table.insert(LT.recent, { text = message, expires = timer.getTime() + cfg.message_duration_s })
     LT.checkAllLost()
 end
 
@@ -401,7 +415,7 @@ function LT.summary(detailed)
         local shooter = LT.shooters[who]
         if shooter and shooter.kills > 0 then
             line = line .. string.format(" (%d rounds fired, %d per kill)",
-                LT.roundsFired(who), math.floor(shooter.atLastKill / shooter.kills + 0.5))
+                LT.roundsFired(who), round(shooter.atLastKill / shooter.kills))
         end
         table.insert(lines, line)
     end
@@ -430,8 +444,10 @@ function LT.summary(detailed)
 end
 
 -- Full-screen summary. clearview replaces the message stack, which is as close
--- to a splash screen as mission scripting gets.
-function LT.showSplash(title, subtitle, footer, duration)
+-- to a splash screen as mission scripting gets. The status block would replace
+-- it in turn, so it pauses for as long as the summary shows, or stops for good
+-- when final (the mission is ending).
+function LT.showSplash(title, subtitle, footer, duration, final)
     local elapsed = timer.getTime() - LT.startTime
     local lines = { "==========  " .. title .. "  ==========", subtitle }
     if cfg.mission_name ~= "" then
@@ -448,6 +464,11 @@ function LT.showSplash(title, subtitle, footer, duration)
     -- With LossTrackerGameGUI.lua installed the summary appears in a window,
     -- so the text only needs to reach the hook (via onTriggerMessage).
     if LT.hookPresent then duration = 2 end
+    if final then
+        LT.statusStopped = true
+    else
+        LT.statusResumeAt = timer.getTime() + duration
+    end
     trigger.action.outTextForCoalition(LT.playerSide, text, duration, true)
     log(text)
 end
@@ -487,7 +508,7 @@ function LT.onPlayerLost(unit, what)
     LT.playersLost[name] = true
 
     local title = otherPlayersFlying(name) and (player .. " DOWN") or "MISSION FAILED"
-    LT.showSplash(title, player .. " " .. PLAYER_LOSS_TEXT[what], nil, cfg.summary_duration_s)
+    LT.showSplash(title, player .. " " .. PLAYER_LOSS_TEXT[what], nil, cfg.summary_duration_s, false)
 end
 
 -- Set end_flag after end_mission_delay_s (the EndMission trigger watches it).
@@ -515,13 +536,16 @@ function LT.checkAllLost()
 
     local footer
     if cfg.end_mission_when_all_lost then footer = LT.scheduleEnd() end
-    LT.showSplash("MISSION COMPLETE", "All enemy aircraft eliminated", footer, endSplashDuration())
+    LT.showSplash("MISSION COMPLETE", "All enemy aircraft eliminated", footer, endSplashDuration(), true)
 end
 
--- Ends the mission once every human pilot on the player's coalition has
--- emptied their aircraft. Pilots who never had ammo don't count as empty.
+-- Shows the OUT OF AMMO summary once every human pilot on the player's
+-- coalition has emptied their aircraft (pilots who never had ammo don't
+-- count). The mission carries on and later losses still count, unless
+-- end_mission_when_out_of_ammo is set. Shown again only after someone has
+-- ammo again (rearmed) and runs dry once more.
 function LT.checkOutOfAmmo()
-    if not cfg.end_mission_when_out_of_ammo or LT.endScheduled then return end
+    if LT.allLost then return end
     local flying, empty = 0, {}
     for _, unit in ipairs(coalition.getPlayers(LT.playerSide) or {}) do
         local name = try(function() return unit:getName() end)
@@ -535,10 +559,71 @@ function LT.checkOutOfAmmo()
             end
         end
     end
-    if flying == 0 or #empty < flying then return end
+    if flying == 0 or #empty < flying then
+        LT.outOfAmmoShown = false
+        return
+    end
+    if LT.outOfAmmoShown then return end
+    LT.outOfAmmoShown = true
 
     local who = table.concat(empty, ", ") .. (#empty == 1 and " is" or " are") .. " out of ammunition"
-    LT.showSplash("OUT OF AMMO", who, LT.scheduleEnd(), endSplashDuration())
+    if cfg.end_mission_when_out_of_ammo then
+        local footer = LT.scheduleEnd()
+        if footer then
+            LT.showSplash("OUT OF AMMO", who, footer, endSplashDuration(), true)
+            return
+        end
+    end
+    LT.showSplash("OUT OF AMMO", who, "Mission continues: losses from here on still count.",
+        cfg.summary_duration_s, false)
+end
+
+-- Live status ------------------------------------------------------------
+-- A block in the top-right message area for each human pilot, refreshed every
+-- status_interval_s: rounds fired, kills, rounds per kill, the side's score and
+-- recent losses. clearview replaces the previous block (a plain message would
+-- stack up), which would also wipe kill messages, so the block repeats them.
+
+function LT.statusText(label)
+    local fired = LT.roundsFired(label) or 0
+    local kills = LT.kills[label] or 0
+    local lines = {
+        string.format("Rounds fired: %d", fired),
+        string.format("Kills: %d", kills),
+    }
+    if kills > 0 then
+        table.insert(lines, string.format("Rate: %d rounds/kill", round(fired / kills)))
+    end
+    local total = #LT.order
+    local percent = total > 0 and round(100 * LT.credited / total) or 0
+    table.insert(lines, string.format("Score: %d of %d enemy aircraft (%d%%)", LT.credited, total, percent))
+
+    local now = timer.getTime()
+    local recent = {}
+    for _, event in ipairs(LT.recent) do
+        if event.expires > now then table.insert(recent, event) end
+    end
+    LT.recent = recent
+    if #recent > 0 then
+        table.insert(lines, "")
+        for _, event in ipairs(recent) do table.insert(lines, event.text) end
+    end
+    return table.concat(lines, "\n")
+end
+
+function LT.updateStatus(_, now)
+    if LT.statusStopped then return nil end
+    if LT.statusResumeAt and now < LT.statusResumeAt then  -- a summary is showing
+        return now + cfg.status_interval_s
+    end
+    for _, unit in ipairs(coalition.getPlayers(LT.playerSide) or {}) do
+        local label = try(function() return unit:getPlayerName() end)
+        local groupId = try(function() return unit:getGroup():getID() end)
+        if label and groupId and try(function() return unit:isExist() end) then
+            trigger.action.outTextForGroup(groupId, LT.statusText(label), cfg.status_interval_s + 1, true)
+        end
+    end
+    return now + cfg.status_interval_s
 end
 
 local handler = {}
@@ -550,6 +635,9 @@ end
 LT.registerExisting()
 world.addEventHandler(handler)
 timer.scheduleFunction(LT.poll, nil, timer.getTime() + cfg.poll_interval_s)
+if cfg.status_enabled then
+    timer.scheduleFunction(LT.updateStatus, nil, timer.getTime() + cfg.status_interval_s)
+end
 missionCommands.addCommandForCoalition(LT.playerSide, "Enemy loss tally", nil, function()
     tell(LT.summary(), 20)
 end)

@@ -9,6 +9,7 @@ Mock = {
     timers = {},
     flags = {},
     messages = {},
+    groupMessages = {},
     log = {},
     menus = {},
     handlers = {},
@@ -45,6 +46,9 @@ function trigger.action.outTextForCoalition(side, text, duration, clearview)
     table.insert(Mock.messages, { side = side, text = text, duration = duration, clearview = clearview == true })
 end
 function trigger.action.setUserFlag(flag, value) Mock.flags[flag] = value end
+function trigger.action.outTextForGroup(groupId, text, duration, clearview)
+    table.insert(Mock.groupMessages, { group = groupId, text = text, duration = duration, clearview = clearview == true })
+end
 
 env = {}
 function env.info(message) table.insert(Mock.log, message) end
@@ -78,6 +82,7 @@ local GroupMethods = {}
 GroupMethods.__index = GroupMethods
 function GroupMethods:getUnits() return { self.unit } end
 function GroupMethods:getCategory() return self.category end
+function GroupMethods:getID() return self.id end
 
 Unit = {}
 function Unit.getByName(name)
@@ -102,7 +107,9 @@ function Mock.addUnit(name, opts)
         speed = opts.speed or 100,
         rounds = opts.rounds,
     }, UnitMethods)
-    unit.group = setmetatable({ unit = unit, category = opts.category or Group.Category.AIRPLANE }, GroupMethods)
+    Mock.nextGroupId = (Mock.nextGroupId or 0) + 1
+    unit.group = setmetatable({ unit = unit, category = opts.category or Group.Category.AIRPLANE,
+        id = Mock.nextGroupId }, GroupMethods)
     Mock.units[name] = unit
     return unit
 end

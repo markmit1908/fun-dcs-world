@@ -64,6 +64,11 @@ class LossTrackerConfig:
     # How long the "MISSION FAILED" summary stays up after a player's aircraft
     # is lost. The "MISSION COMPLETE" one stays until the mission ends.
     summary_duration_s: int = 60
+    # Status block in the top-right message area for each human pilot:
+    # rounds fired, kills, rounds per kill, score and recent losses,
+    # refreshed every status_interval_s until a summary is shown.
+    status_enabled: bool = True
+    status_interval_s: float = 1.0
 
     # End conditions. When one is met, a summary is shown and the mission
     # ends end_mission_delay_s later (the tracker sets end_flag, which an
@@ -71,8 +76,10 @@ class LossTrackerConfig:
     # Every enemy aircraft is lost ("MISSION COMPLETE").
     end_mission_when_all_lost: bool = True
     # Every human pilot on the player's coalition has used up all their ammo
-    # ("OUT OF AMMO"). Pilots who started with none don't count.
-    end_mission_when_out_of_ammo: bool = True
+    # ("OUT OF AMMO"; pilots who started with none don't count). The summary
+    # is always shown; by default the mission carries on and losses after it
+    # (a target damaged by the last burst going down, say) still count.
+    end_mission_when_out_of_ammo: bool = False
     end_mission_delay_s: float = 30.0
     end_flag: int = 9001
 
@@ -94,6 +101,7 @@ class LossTrackerConfig:
             "poll_interval_s",
             "message_duration_s",
             "summary_duration_s",
+            "status_interval_s",
             "end_mission_delay_s",
         ):
             if getattr(self, name) <= 0:

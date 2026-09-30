@@ -50,7 +50,7 @@ The player start is the same in all four.
 
 You fly a Spitfire LF Mk IX, starting in the air at 6,000 ft about 2 miles south of the target lane over the Strait of Dover. Three German formations fly a racetrack between 50°50'07"N 1°10'40"E and 51°07'44"N 1°35'53"E. Each formation is one Ju 88 leading two Bf 109 K-4s, flying at 5,000, 12,000 and 20,000 ft. The targets have no ammunition, are set to Weapon Hold and don't react to threats.
 
-A target counts as destroyed when it's shot down, crashes, its pilot ejects, or it lands away from a German airfield. Each loss is announced on screen with the rounds you fired for it, and the F10 radio menu shows the running tally. The mission ends 30 seconds after the last target is gone or you run out of ammunition, with a summary screen. See [Extended loss scoring](#extended-loss-scoring).
+A target counts as destroyed when it's shot down, crashes, its pilot ejects, or it lands away from a German airfield. A panel in the top-right corner shows your rounds fired, kills, rounds per kill and score, and each loss is announced there with the rounds you fired for it. Running out of ammunition shows a summary but the mission carries on, so a target you damaged with your last burst still counts if it goes down. The mission ends 30 seconds after the last target is gone, with a summary screen. See [Extended loss scoring](#extended-loss-scoring).
 
 ### Required DCS content
 
@@ -103,14 +103,16 @@ The tests check the KMZ structure and also the data files: estimated bounds must
 - has its pilot eject, or
 - lands anywhere other than an allied airbase, FARP or ship.
 
-The credit goes to the last unit on the player's coalition that hit it within the last 15 minutes. Normal DCS scoring isn't changed. Each loss is announced on screen with the rounds the attacker fired for it, and the F10 radio menu shows the tally.
+The credit goes to the last unit on the player's coalition that hit it within the last 15 minutes. Normal DCS scoring isn't changed. Each loss is announced on screen with the rounds the attacker fired for it and their effective rate at that moment (total rounds fired so far � kills so far), and the F10 radio menu shows the tally.
+
+While flying, each human pilot sees a status panel in the top-right message area, refreshed every second: rounds fired, kills, rounds per kill, the side's score (enemy aircraft credited, and the percentage) and the last few losses. DCS messages can't be pinned, so the panel replaces itself each second, and it repeats the kill messages it would otherwise hide. It pauses while a summary is up and stops at MISSION COMPLETE. Turn it off with `status_enabled=False`.
 
 A full-screen summary lists every enemy aircraft with the time of its loss, how it was lost, who gets the credit, the rounds fired for that kill and the running total, plus each attacker's rounds per kill. It appears when:
 
 | Title | When | Mission |
 | --- | --- | --- |
 | MISSION COMPLETE | Every enemy aircraft is lost | Ends 30 s later |
-| OUT OF AMMO | Every human pilot on the player's side has used up their ammunition | Ends 30 s later |
+| OUT OF AMMO | Every human pilot on the player's side has used up their ammunition | Keeps running; later losses still count (`end_mission_when_out_of_ammo=True` ends it 30 s later) |
 | MISSION FAILED | A human pilot's aircraft is lost (crash, ejection, pilot killed) | Keeps running |
 
 With the hook `loss_tracker/LossTrackerGameGUI.lua` installed (see above), the summary opens in a real window with a close button, built from DCS's own notice dialog. In single player the simulation pauses until you close it; the 30-second countdown to the end of the mission resumes after that. The hook also writes every loss and summary into the mission's debriefing log as "comment" events, one per line, and appends each summary to `Saved Games\DCS\Logs\LossTracker.log`, named by the mission's title (`LossTrackerConfig.mission_name`, which defaults to the sortie text; DCS itself only knows the running copy as `tempMission`). Without the hook the summary is a full-screen text message. Mission scripts can't draw windows or write files, which is why this part is a separate hook.

@@ -504,10 +504,12 @@ def test_rounds_per_kill(armed):
 
     assert rounds(sim, "Bomber") == (200, 200)
     assert rounds(sim, "Fighter") == (400, 600)
-    assert any("credited to Mark (200 rounds, 200 fired so far)" in m for m in sim.messages())
+    # Rate at each kill = total rounds so far / kills so far.
+    assert any("credited to Mark (200 rounds, 200 fired so far, 200 per kill)" in m for m in sim.messages())
+    assert any("credited to Mark (400 rounds, 600 fired so far, 300 per kill)" in m for m in sim.messages())
     complete = [m for m in sim.splashes() if "MISSION COMPLETE" in m][0]
     assert "Mark: 2 (600 rounds fired, 300 per kill)" in complete
-    assert "Fighter (Bf-109K-4): crashed - Mark (400 rounds, 600 fired so far)" in complete
+    assert "Fighter (Bf-109K-4): crashed - Mark (400 rounds, 600 fired so far, 300 per kill)" in complete
 
 
 def test_rounds_read_live_at_kill_time(armed):
@@ -561,21 +563,51 @@ def test_kill_without_shooting_has_no_rounds(sim):
 # Out of ammo ------------------------------------------------------------------
 
 
-def test_out_of_ammo_ends_mission(armed):
+def test_out_of_ammo_shows_summary_and_mission_continues(armed):
     sim = armed
     sim.shoot(sim.player, 600)
     sim.hit(sim.player, sim.bandit)
     sim.kill(sim.player, sim.bandit)
+    sim.hit(sim.player, sim.second)
     sim.shoot(sim.player, 0)
     out = [m for m in sim.splashes() if "OUT OF AMMO" in m]
     assert len(out) == 1
     assert "Mark is out of ammunition" in out[0]
     assert "Enemy aircraft lost: 1 of 2" in out[0]
+    assert "Mission continues: losses from here on still count." in out[0]
+    sim.advance(120)
+    assert sim.end_flag is None
+
+    # The target damaged by the last burst goes down later: still counts.
+    sim.crash(sim.second)
+    sim.advance()
+    assert sim.result("Fighter")[1] == "Mark"
+    assert sim.mock.flags[sim.config.score_flag] == 2
+    assert any("MISSION COMPLETE" in m for m in sim.splashes())
+
+
+def test_out_of_ammo_can_end_mission(sim):
+    sim.player.rounds = 1000
+    sim.start(LossTrackerConfig(end_mission_when_out_of_ammo=True))
+    sim.shoot(sim.player, 0)
+    out = [m for m in sim.splashes() if "OUT OF AMMO" in m]
     assert "Mission ends in 30 seconds" in out[0]
     sim.advance(sim.config.end_mission_delay_s - 1)
     assert sim.end_flag is None
     sim.advance(2)
     assert sim.end_flag is True
+
+
+def test_out_of_ammo_shown_again_after_rearm(armed):
+    sim = armed
+    sim.shoot(sim.player, 0)
+    sim.shoot(sim.player, 0)
+    sim.advance(10)
+    assert len([m for m in sim.splashes() if "OUT OF AMMO" in m]) == 1
+    sim.player.rounds = 1000  # rearmed
+    sim.advance(10)
+    sim.shoot(sim.player, 0)
+    assert len([m for m in sim.splashes() if "OUT OF AMMO" in m]) == 2
 
 
 def test_out_of_ammo_found_by_poll(armed):
@@ -605,17 +637,10 @@ def test_out_of_ammo_waits_for_every_player(armed):
     assert " are out of ammunition" in sim.splashes()[0]
 
 
-def test_out_of_ammo_disabled(sim):
+def test_complete_after_out_of_ammo_end_does_not_reschedule(sim):
     sim.player.rounds = 1000
-    sim.start(LossTrackerConfig(end_mission_when_out_of_ammo=False))
-    sim.shoot(sim.player, 0)
-    sim.advance(60)
-    assert sim.splashes() == []
-    assert sim.end_flag is None
-
-
-def test_complete_after_out_of_ammo_does_not_reschedule(armed):
-    sim = armed
+    sim.second = sim.unit("Fighter", type="Bf-109K-4")
+    sim.start(LossTrackerConfig(end_mission_when_out_of_ammo=True))
     sim.shoot(sim.player, 500)
     sim.hit(sim.player, sim.bandit)
     sim.kill(sim.player, sim.bandit)
@@ -629,6 +654,94 @@ def test_complete_after_out_of_ammo_does_not_reschedule(armed):
     assert "Mission ends in" not in complete[0]
     sim.advance(sim.config.end_mission_delay_s)
     assert sim.end_flag is True
+
+
+# Live status ------------------------------------------------------------------
+
+
+def status(sim):
+    """Latest status block sent to the player's group."""
+    blocks = [m for m in sim.mock.groupMessages.values() if m.group == sim.player.group.id]
+    return blocks[-1] if blocks else None
+
+
+def test_status_block_shows_rounds_kills_rate_score(armed):
+    sim = armed
+    sim.advance(1)
+    block = status(sim)
+    assert block.clearview is True
+    assert block.duration == 2
+    assert block.text == "Rounds fired: 0\nKills: 0\nScore: 0 of 2 enemy aircraft (0%)"
+
+    sim.shoot(sim.player, 700)
+    sim.hit(sim.player, sim.bandit)
+    sim.kill(sim.player, sim.bandit)
+    sim.advance(1)
+    lines = status(sim).text.splitlines()
+    assert lines[:4] == [
+        "Rounds fired: 300",
+        "Kills: 1",
+        "Rate: 300 rounds/kill",
+        "Score: 1 of 2 enemy aircraft (50%)",
+    ]
+    # The kill message is repeated in the block, since the block replaces it.
+    assert lines[5].startswith("Ju-88A4 (Bomber) shot down - credited to Mark")
+
+    sim.shoot(sim.player, 400)  # rate is live: 600 fired for 1 kill
+    sim.advance(1)
+    assert "Rate: 600 rounds/kill" in status(sim).text
+
+
+def test_status_recent_losses_expire(armed):
+    sim = armed
+    sim.kill(sim.player, sim.bandit)
+    sim.advance(1)
+    assert "shot down" in status(sim).text
+    sim.advance(sim.config.message_duration_s + 1)
+    assert "shot down" not in status(sim).text
+
+
+def test_status_pauses_for_summary_and_resumes(armed):
+    sim = armed
+    sim.shoot(sim.player, 0)  # OUT OF AMMO summary, mission continues
+    count = len(sim.mock.groupMessages)
+    sim.advance(sim.config.summary_duration_s - 1)
+    assert len(sim.mock.groupMessages) == count
+    sim.advance(2)
+    assert len(sim.mock.groupMessages) > count
+
+
+def test_status_stops_at_mission_complete(armed):
+    sim = armed
+    sim.kill(sim.player, sim.bandit)
+    sim.kill(sim.player, sim.second)
+    count = len(sim.mock.groupMessages)
+    sim.advance(120)
+    assert len(sim.mock.groupMessages) == count
+
+
+def test_status_short_pause_with_hook_window(armed):
+    sim = armed
+    sim.tracker.hookPresent = True
+    sim.shoot(sim.player, 0)
+    count = len(sim.mock.groupMessages)
+    sim.advance(3)
+    assert len(sim.mock.groupMessages) > count
+
+
+def test_status_only_for_human_pilots(armed):
+    sim = armed
+    ai = sim.unit("Blue AI", side=BLUE)
+    sim.advance(3)
+    groups = {m.group for m in sim.mock.groupMessages.values()}
+    assert groups == {sim.player.group.id}
+    assert ai.group.id not in groups
+
+
+def test_status_disabled(sim):
+    sim.start(LossTrackerConfig(status_enabled=False))
+    sim.advance(10)
+    assert len(sim.mock.groupMessages) == 0
 
 
 # Python side --------------------------------------------------------------
@@ -714,7 +827,10 @@ def test_mission_with_only_out_of_ammo_end():
     from dcs.terrain import Caucasus
 
     mission = dcs.Mission(Caucasus())
-    add_loss_tracker(mission, LossTrackerConfig(end_mission_when_all_lost=False))
+    add_loss_tracker(
+        mission,
+        LossTrackerConfig(end_mission_when_all_lost=False, end_mission_when_out_of_ammo=True),
+    )
     assert len(mission.triggerrules.triggers) == 2
 
 
