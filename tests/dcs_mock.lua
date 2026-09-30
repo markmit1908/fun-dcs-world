@@ -26,7 +26,8 @@ world = {
         S_EVENT_CRASH = 5, S_EVENT_EJECTION = 6, S_EVENT_DEAD = 8, S_EVENT_PILOT_DEAD = 9,
         S_EVENT_MISSION_START = 11, S_EVENT_MISSION_END = 12, S_EVENT_BIRTH = 15,
         S_EVENT_SHOOTING_START = 23, S_EVENT_SHOOTING_END = 24,
-        S_EVENT_KILL = 28, S_EVENT_UNIT_LOST = 30,
+        S_EVENT_ENGINE_SHUTDOWN = 19, S_EVENT_KILL = 28, S_EVENT_UNIT_LOST = 30,
+        S_EVENT_AI_ABORT_MISSION = 38,
     },
 }
 function world.addEventHandler(handler) table.insert(Mock.handlers, handler) end
@@ -70,8 +71,11 @@ function UnitMethods:isExist() return self.alive end
 function UnitMethods:isActive() return self.active end
 function UnitMethods:inAir() return self.in_air end
 function UnitMethods:getPoint() return self.point end
-function UnitMethods:getVelocity() return { x = self.speed, y = 0, z = 0 } end
+function UnitMethods:getVelocity() return { x = self.speed, y = self.vy, z = 0 } end
+function UnitMethods:getFuel() return self.fuel end
 function UnitMethods:getGroup() return self.group end
+function UnitMethods:getLife() return self.life end
+function UnitMethods:getLife0() return self.life0 end
 -- Like DCS, nil once all ammo is expended.
 function UnitMethods:getAmmo()
     if (self.rounds or 0) <= 0 then return nil end
@@ -103,9 +107,13 @@ function Mock.addUnit(name, opts)
         alive = true,
         active = opts.active ~= false,
         in_air = opts.in_air ~= false,
-        point = { x = opts.x or 0, y = 0, z = opts.z or 0 },
+        point = { x = opts.x or 0, y = opts.alt or 0, z = opts.z or 0 },
+        vy = 0,
+        fuel = opts.fuel or 1,
         speed = opts.speed or 100,
         rounds = opts.rounds,
+        life0 = opts.life0 or 100,
+        life = opts.life or opts.life0 or 100,
     }, UnitMethods)
     Mock.nextGroupId = (Mock.nextGroupId or 0) + 1
     unit.group = setmetatable({ unit = unit, category = opts.category or Group.Category.AIRPLANE,

@@ -109,7 +109,28 @@ The tests check the KMZ structure and also the data files: estimated bounds must
 
 The credit goes to the last unit on the player's coalition that hit it within the last 15 minutes. Normal DCS scoring isn't changed. Each loss is announced on screen with the rounds the attacker fired for it and their effective rate at that moment (total rounds fired so far ÷ kills so far), and the F10 radio menu shows the tally.
 
-While flying, each human pilot sees a status panel in the top-right message area, refreshed every second: rounds fired, kills, rounds per kill, the side's score (enemy aircraft credited, and the percentage) and the last few losses. DCS messages can't be pinned, so the panel replaces itself each second, and it repeats the kill messages it would otherwise hide. It pauses while a summary is up and stops at MISSION COMPLETE. Turn it off with `status_enabled=False`.
+While flying, each human pilot sees a status panel in the top-right message area, refreshed every second: rounds fired, kills, rounds per kill, the side's score (enemy aircraft credited, and the percentage), every enemy aircraft your side has hit, and the last few losses. The hit list shows each aircraft's damage as a bar and percentage from DCS's hit points. Your current target (the one you hit last) is marked `>` and listed first, then the other survivors (most recently hit first), then those already lost:
+
+```
+Aircraft hit:
+> Ju-88A4 (LOW Bomber Pilot #1) [####------] 40% (6 hits, 1 critical)  ENGINE OUT
+  Bf-109K-4 (LOW Fighters Pilot #2) [#---------] 13% (13 hits)  SLOWING
+  Bf-109K-4 (LOW Fighters Pilot #1) shot down (6 hits, 1 critical)
+```
+ Aircraft with a detailed damage model can keep full hit points until destroyed, and then only the hit count shows (the WWII targets here do lose hit points). Each hit's hit-point and fuel values are also written to `dcs.log`.
+
+Each line also carries damage indicators:
+
+| Indicator | Meaning |
+| --- | --- |
+| CRITICAL HIT | One hit removed at least 25% of its starting hit points (ordinary gun hits take a few percent). Shows for 5 s; the count stays. |
+| ENGINE OUT | DCS reported an engine shutdown while airborne. |
+| BREAKING OFF | The AI decided it was too damaged to carry on (DCS's abort mission event). |
+| LEAKING FUEL | Fuel falling at 5% a minute or more over 20 s; normal burn is a percent or two. |
+| LOSING HEIGHT | Descending faster than 10 m/s, or 500 m below where it started. |
+| SLOWING | Below 70% of its starting speed. |
+
+Every loss line (the on-screen message, the summaries, the debriefing log and `LossTracker.log`) ends with that target's damage notes, for example `(1008 rounds, 1008 fired so far, 1008 per kill; 6 hits, 1 critical, engine out)`. Survivors in a summary get them too. The thresholds are `LossTrackerConfig` settings. DCS messages can't be pinned, so the panel replaces itself each second, and it repeats the kill messages it would otherwise hide. It pauses while a summary is up and stops at MISSION COMPLETE. Turn it off with `status_enabled=False`.
 
 A full-screen summary lists every enemy aircraft with the time of its loss, how it was lost, who gets the credit, the rounds fired for that kill and the running total, plus each attacker's rounds per kill. It appears when:
 

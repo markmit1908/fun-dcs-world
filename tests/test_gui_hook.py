@@ -125,6 +125,11 @@ def test_loss_messages_go_to_debriefing_only(gui, tmp_path):
     assert not (tmp_path / "Logs" / "LossTracker.log").exists()
 
 
+def test_uncredited_loss_with_damage_notes(gui):
+    gui.message("Ju-88A4 (LOW Bomber Pilot #1) crashed - no credit (4 hits, 1 critical)")
+    assert gui.debriefing() == ["LossTracker: Ju-88A4 (LOW Bomber Pilot #1) crashed - no credit (4 hits, 1 critical)"]
+
+
 def test_status_block_is_not_a_loss(gui):
     # The live status block repeats the latest loss line every second.
     status = "Rounds fired: 772\nKills: 1\nRate: 772 rounds/kill\nScore: 1 of 3 enemy aircraft (33%)\n\n" + LOSS

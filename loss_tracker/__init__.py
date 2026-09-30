@@ -70,6 +70,20 @@ class LossTrackerConfig:
     status_enabled: bool = True
     status_interval_s: float = 1.0
 
+    # Damage indicators on the status panel's target line.
+    # One hit removing at least this share of starting life is critical.
+    critical_hit_fraction: float = 0.25
+    critical_hit_display_s: float = 5.0
+    # Fuel falling at least this fast (fraction per minute, over
+    # trend_window_s) is a leak; normal burn is a percent or two a minute.
+    fuel_leak_per_min: float = 0.05
+    trend_window_s: float = 20.0
+    # Losing height: this far below the starting altitude, or descending
+    # faster than descent_rate_mps. Slowing: below this share of starting speed.
+    losing_height_m: float = 500.0
+    descent_rate_mps: float = 10.0
+    slowing_fraction: float = 0.7
+
     # End conditions. When one is met, a summary is shown and the mission
     # ends end_mission_delay_s later (the tracker sets end_flag, which an
     # EndMission trigger watches).
@@ -102,6 +116,13 @@ class LossTrackerConfig:
             "message_duration_s",
             "summary_duration_s",
             "status_interval_s",
+            "critical_hit_fraction",
+            "critical_hit_display_s",
+            "fuel_leak_per_min",
+            "trend_window_s",
+            "losing_height_m",
+            "descent_rate_mps",
+            "slowing_fraction",
             "end_mission_delay_s",
         ):
             if getattr(self, name) <= 0:

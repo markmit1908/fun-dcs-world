@@ -28,6 +28,13 @@ local defaults = {
     summary_duration_s = 60,
     status_enabled = true,
     status_interval_s = 1,
+    critical_hit_fraction = 0.25,
+    critical_hit_display_s = 5,
+    fuel_leak_per_min = 0.05,
+    trend_window_s = 20,
+    losing_height_m = 500,
+    descent_rate_mps = 10,
+    slowing_fraction = 0.7,
     end_mission_when_all_lost = true,
     end_mission_when_out_of_ammo = false,
     end_mission_delay_s = 30,
@@ -51,6 +58,7 @@ LossTracker = {
     credited = 0,
     kills = {},
     recent = {},
+    currentTarget = {},
     statusStopped = false,
     allLost = false,
     endScheduled = false,
@@ -118,7 +126,15 @@ function LT.register(unit)
         coalition = LT.enemySide,
         airborne = try(function() return unit:inAir() end) == true,
         resolved = false,
+        hits = 0,
+        crits = 0,
     }
+    -- Baselines for "losing height" and "slowing".
+    local point = try(function() return unit:getPoint() end)
+    local v = try(function() return unit:getVelocity() end)
+    state.alt0 = point and point.y
+    state.speed0 = v and math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+    if state.speed0 and state.speed0 < 1 then state.speed0 = nil end  -- parked
     LT.aircraft[name] = state
     table.insert(LT.order, state)
 end
@@ -215,10 +231,33 @@ local function round(x) return math.floor(x + 0.5) end
 
 -- rounds for this kill, total so far, and total / kills so far (the
 -- effective rate at the moment of this kill).
-local function roundsText(state)
-    if state.rounds == nil then return "" end
-    return string.format(" (%d rounds, %d fired so far, %d per kill)",
-        state.rounds, state.roundsTotal, state.rate)
+local function plural(n, word)
+    return string.format("%d %s%s", n, word, n == 1 and "" or "s")
+end
+
+-- What the target went through: hits, critical hits and lasting damage states.
+local function damageNotes(state)
+    if state.hits == 0 then return nil end
+    local notes = { plural(state.hits, "hit") }
+    if state.crits > 0 then table.insert(notes, string.format("%d critical", state.crits)) end
+    if state.engineOut then table.insert(notes, "engine out") end
+    if state.fuelLeak then table.insert(notes, "fuel leak") end
+    if state.aborting then table.insert(notes, "broke off") end
+    return table.concat(notes, ", ")
+end
+
+-- " (rounds for this kill, total so far, total / kills so far; damage notes)":
+-- the rate is the effective rate at the moment of this kill.
+local function detailsText(state)
+    local parts = {}
+    if state.rounds ~= nil then
+        table.insert(parts, string.format("%d rounds, %d fired so far, %d per kill",
+            state.rounds, state.roundsTotal, state.rate))
+    end
+    local notes = damageNotes(state)
+    if notes then table.insert(parts, notes) end
+    if #parts == 0 then return "" end
+    return " (" .. table.concat(parts, "; ") .. ")"
 end
 
 function LT.nearAlliedBase(side, point)
@@ -268,9 +307,9 @@ function LT.resolve(state, reason, attacker)
 
     local message = string.format("%s (%s) %s", state.type, state.name, REASON_TEXT[reason] or reason)
     if attacker then
-        message = message .. " - credited to " .. attacker .. roundsText(state)
+        message = message .. " - credited to " .. attacker .. detailsText(state)
     else
-        message = message .. " - no credit"
+        message = message .. " - no credit" .. detailsText(state)
     end
     tell(message)
     log(message)
@@ -318,6 +357,7 @@ function LT.onEvent(event)
         if state and attacker then
             state.attacker = attacker
             state.hitTime = timer.getTime()
+            LT.recordHit(state, event.target, attacker)
         end
 
     elseif id == E.S_EVENT_SHOOTING_START or id == E.S_EVENT_SHOOTING_END
@@ -354,6 +394,21 @@ function LT.onEvent(event)
         local state = trackedState(event.initiator)
         if state then LT.onLanded(state, event.initiator, event.place) end
 
+    elseif id == E.S_EVENT_ENGINE_SHUTDOWN then
+        local state = trackedState(event.initiator)
+        if state and try(function() return event.initiator:inAir() end) then
+            state.engineOut = true
+            log(state.name .. ": engine out")
+        end
+
+    elseif E.S_EVENT_AI_ABORT_MISSION and id == E.S_EVENT_AI_ABORT_MISSION then
+        -- The AI judged itself too damaged to carry on (not in older DCS).
+        local state = trackedState(event.initiator)
+        if state then
+            state.aborting = true
+            log(state.name .. ": breaking off")
+        end
+
     elseif id == E.S_EVENT_TAKEOFF then
         local state = trackedState(event.initiator)
         if state then
@@ -372,6 +427,8 @@ end
 function LT.poll(_, now)
     for _, state in ipairs(LT.order) do
         if not state.resolved and not state.pending then
+            -- Keep damaged targets' fuel/height/speed trends current.
+            if state.hits > 0 then LT.conditions(state) end
             local unit = Unit.getByName(state.name)
             if unit == nil or not try(function() return unit:isExist() end) then
                 LT.queue(state, state.safe and "returned" or "lost", recentAttacker(state))
@@ -432,11 +489,12 @@ function LT.summary(detailed)
         for _, state in ipairs(states) do
             if state.resolved then
                 local status = REASON_TEXT[state.reason] or state.reason
-                if state.creditedTo then status = status .. " - " .. state.creditedTo .. roundsText(state) end
-                table.insert(lines, string.format("  %s  %s (%s): %s",
-                    clock(state.lostAt), state.name, state.type, status))
+                if state.creditedTo then status = status .. " - " .. state.creditedTo end
+                table.insert(lines, string.format("  %s  %s (%s): %s%s",
+                    clock(state.lostAt), state.name, state.type, status, detailsText(state)))
             else
-                table.insert(lines, string.format("  %s (%s): still active", state.name, state.type))
+                table.insert(lines, string.format("  %s (%s): still active%s",
+                    state.name, state.type, detailsText(state)))
             end
         end
     end
@@ -584,6 +642,145 @@ end
 -- recent losses. clearview replaces the previous block (a plain message would
 -- stack up), which would also wipe kill messages, so the block repeats them.
 
+-- Damage to enemy aircraft hit by the player's side; each pilot's current
+-- target is the one they hit last.
+-- Damage comes from Unit.getLife() / getLife0(). Aircraft with a detailed
+-- damage model may keep full life until destroyed; then only the hit count
+-- shows. Each hit's life values go to dcs.log to confirm which applies.
+
+local function currentLife(state)
+    local unit = Unit.getByName(state.name)
+    if unit == nil then return state.life end
+    local life = try(function() return unit:getLife() end)
+    if life then state.life = life end
+    return state.life
+end
+
+-- 0-100, or nil when life hasn't dropped below full (or isn't available).
+local function damagePercent(state)
+    local life, life0 = currentLife(state), state.life0
+    if life == nil or life0 == nil or life0 <= 0 or life >= life0 then return nil end
+    return math.max(0, math.min(100, round(100 * (1 - life / life0))))
+end
+
+-- A hit that removes more than critical_hit_fraction of the target's starting
+-- life at once counts as critical (ordinary gun hits take a few percent).
+function LT.recordHit(state, unit, attacker)
+    state.hits = state.hits + 1
+    state.life0 = state.life0 or try(function() return unit:getLife0() end)
+    local before = state.life or state.life0
+    state.life = try(function() return unit:getLife() end) or state.life
+    LT.currentTarget[attacker] = state
+    local critical = before and state.life and state.life0 and state.life0 > 0
+        and (before - state.life) >= cfg.critical_hit_fraction * state.life0
+    if critical then
+        state.crits = state.crits + 1
+        state.critUntil = timer.getTime() + cfg.critical_hit_display_s
+    end
+    log(string.format("hit %d on %s by %s: life %s of %s, fuel %s%s", state.hits, state.name, attacker,
+        tostring(state.life), tostring(state.life0),
+        tostring(try(function() return unit:getFuel() end)), critical and " CRITICAL" or ""))
+end
+
+-- Fuel, altitude and speed samples over the last trend_window_s, taken at
+-- most once a second (from the status refresh and the poll).
+local function sample(state)
+    local unit = Unit.getByName(state.name)
+    if unit == nil then return nil end
+    local now = timer.getTime()
+    local last = state.samples and state.samples[#state.samples]
+    if last and now - last.t < 0.9 then return last end
+    local point = try(function() return unit:getPoint() end)
+    local v = try(function() return unit:getVelocity() end)
+    local current = {
+        t = now,
+        fuel = try(function() return unit:getFuel() end),
+        alt = point and point.y,
+        vy = v and v.y,
+        speed = v and math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z),
+    }
+    state.samples = state.samples or {}
+    table.insert(state.samples, current)
+    while now - state.samples[1].t > cfg.trend_window_s do table.remove(state.samples, 1) end
+    return current
+end
+
+-- Damage indicators shown on the target line. Critical hit flashes for a few
+-- seconds; engine out, breaking off and a detected fuel leak stay; losing
+-- height and slowing reflect the moment.
+function LT.conditions(state)
+    local tags = {}
+    if state.critUntil and timer.getTime() < state.critUntil then table.insert(tags, "CRITICAL HIT") end
+    if state.engineOut then table.insert(tags, "ENGINE OUT") end
+    if state.aborting then table.insert(tags, "BREAKING OFF") end
+
+    local current = sample(state)
+    if current then
+        local first = state.samples[1]
+        local span = current.t - first.t
+        if current.fuel and first.fuel and span >= cfg.trend_window_s / 2
+            and (first.fuel - current.fuel) / span * 60 >= cfg.fuel_leak_per_min then
+            if not state.fuelLeak then log(state.name .. ": fuel leak") end
+            state.fuelLeak = true
+        end
+        if state.fuelLeak then table.insert(tags, "LEAKING FUEL") end
+        if (current.vy and current.vy < -cfg.descent_rate_mps)
+            or (current.alt and state.alt0 and current.alt < state.alt0 - cfg.losing_height_m) then
+            table.insert(tags, "LOSING HEIGHT")
+        end
+        if current.speed and state.speed0 and current.speed < state.speed0 * cfg.slowing_fraction then
+            table.insert(tags, "SLOWING")
+        end
+    end
+    return tags
+end
+
+-- One aircraft's line: damage bar and %, hits and criticals, indicators; or
+-- how it was lost.
+function LT.aircraftLine(state)
+    local label = string.format("%s (%s)", state.type, state.name)
+    local hits = plural(state.hits, "hit")
+    if state.crits > 0 then hits = hits .. string.format(", %d critical", state.crits) end
+    if state.resolved then
+        return string.format("%s %s (%s)", label, REASON_TEXT[state.reason] or state.reason, hits)
+    end
+
+    local line
+    local damage = damagePercent(state)
+    if damage == nil then
+        line = string.format("%s (%s)", label, hits)
+    else
+        local filled = math.floor(damage / 10 + 0.5)
+        line = string.format("%s [%s%s] %d%% (%s)", label,
+            string.rep("#", filled), string.rep("-", 10 - filled), damage, hits)
+    end
+    local tags = LT.conditions(state)
+    if #tags > 0 then line = line .. "  " .. table.concat(tags, ", ") end
+    return line
+end
+
+-- Every enemy aircraft the player's side has hit: this pilot's current
+-- target first (marked ">"), then the other survivors, most recently hit
+-- first, then the losses in the order they happened.
+function LT.damageLines(label)
+    local current = LT.currentTarget[label]
+    local flying, lost = {}, {}
+    for _, state in ipairs(LT.order) do
+        if state.hits > 0 and state ~= current then
+            table.insert(state.resolved and lost or flying, state)
+        end
+    end
+    table.sort(flying, function(a, b) return (a.hitTime or 0) > (b.hitTime or 0) end)
+    table.sort(lost, function(a, b) return (a.lossNumber or 0) < (b.lossNumber or 0) end)
+
+    if current == nil and #flying == 0 and #lost == 0 then return nil end
+    local lines = { "Aircraft hit:" }
+    if current then table.insert(lines, "> " .. LT.aircraftLine(current)) end
+    for _, state in ipairs(flying) do table.insert(lines, "  " .. LT.aircraftLine(state)) end
+    for _, state in ipairs(lost) do table.insert(lines, "  " .. LT.aircraftLine(state)) end
+    return lines
+end
+
 function LT.statusText(label)
     local fired = LT.roundsFired(label) or 0
     local kills = LT.kills[label] or 0
@@ -597,6 +794,7 @@ function LT.statusText(label)
     local total = #LT.order
     local percent = total > 0 and round(100 * LT.credited / total) or 0
     table.insert(lines, string.format("Score: %d of %d enemy aircraft (%d%%)", LT.credited, total, percent))
+    for _, line in ipairs(LT.damageLines(label) or {}) do table.insert(lines, line) end
 
     local now = timer.getTime()
     local recent = {}

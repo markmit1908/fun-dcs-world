@@ -505,11 +505,13 @@ def test_rounds_per_kill(armed):
     assert rounds(sim, "Bomber") == (200, 200)
     assert rounds(sim, "Fighter") == (400, 600)
     # Rate at each kill = total rounds so far / kills so far.
-    assert any("credited to Mark (200 rounds, 200 fired so far, 200 per kill)" in m for m in sim.messages())
-    assert any("credited to Mark (400 rounds, 600 fired so far, 300 per kill)" in m for m in sim.messages())
+    assert any(m.endswith("credited to Mark (200 rounds, 200 fired so far, 200 per kill; 1 hit)")
+               for m in sim.messages())
+    assert any(m.endswith("credited to Mark (400 rounds, 600 fired so far, 300 per kill; 1 hit)")
+               for m in sim.messages())
     complete = [m for m in sim.splashes() if "MISSION COMPLETE" in m][0]
     assert "Mark: 2 (600 rounds fired, 300 per kill)" in complete
-    assert "Fighter (Bf-109K-4): crashed - Mark (400 rounds, 600 fired so far, 300 per kill)" in complete
+    assert "Fighter (Bf-109K-4): crashed - Mark (400 rounds, 600 fired so far, 300 per kill; 1 hit)" in complete
 
 
 def test_rounds_read_live_at_kill_time(armed):
@@ -557,7 +559,7 @@ def test_kill_without_shooting_has_no_rounds(sim):
     sim.hit(sim.player, sim.bandit)
     sim.kill(sim.player, sim.bandit)
     assert rounds(sim, "Bomber") == (None, None)
-    assert any(m.endswith("credited to Mark") for m in sim.messages())
+    assert any(m.endswith("credited to Mark (1 hit)") for m in sim.messages())
 
 
 # Out of ammo ------------------------------------------------------------------
@@ -684,8 +686,9 @@ def test_status_block_shows_rounds_kills_rate_score(armed):
         "Rate: 300 rounds/kill",
         "Score: 1 of 2 enemy aircraft (50%)",
     ]
+    assert lines[4:6] == ["Aircraft hit:", "> Ju-88A4 (Bomber) shot down (1 hit)"]
     # The kill message is repeated in the block, since the block replaces it.
-    assert lines[5].startswith("Ju-88A4 (Bomber) shot down - credited to Mark")
+    assert lines[7].startswith("Ju-88A4 (Bomber) shot down - credited to Mark")
 
     sim.shoot(sim.player, 400)  # rate is live: 600 fired for 1 kill
     sim.advance(1)
@@ -736,6 +739,233 @@ def test_status_only_for_human_pilots(armed):
     groups = {m.group for m in sim.mock.groupMessages.values()}
     assert groups == {sim.player.group.id}
     assert ai.group.id not in groups
+
+
+def target_line(sim):
+    """The current target's line (marked "> ") in the Aircraft hit list."""
+    lines = [l[2:] for l in status(sim).text.splitlines() if l.startswith("> ")]
+    return lines[0] if lines else None
+
+
+def damage_lines(sim):
+    text = status(sim).text.splitlines()
+    if "Aircraft hit:" not in text:
+        return []
+    start = text.index("Aircraft hit:") + 1
+    end = text.index("", start) if "" in text[start:] else len(text)
+    return text[start:end]
+
+
+def test_status_shows_damage_to_current_target(armed):
+    sim = armed
+    sim.advance(1)
+    assert target_line(sim) is None  # nothing hit yet
+
+    sim.bandit.life = 90  # of 100; small drops, not critical
+    sim.hit(sim.player, sim.bandit)
+    sim.bandit.life = 80
+    sim.hit(sim.player, sim.bandit)
+    sim.advance(1)
+    assert target_line(sim) == "Ju-88A4 (Bomber) [##--------] 20% (2 hits)"
+
+    sim.bandit.life = 25  # damage read live, not just at the hit
+    sim.advance(1)
+    assert target_line(sim) == "Ju-88A4 (Bomber) [########--] 75% (2 hits)"
+
+
+def test_status_hits_only_when_life_does_not_drop(armed):
+    # Aircraft with a detailed damage model can keep full life until destroyed.
+    sim = armed
+    sim.hit(sim.player, sim.bandit)
+    sim.advance(1)
+    assert target_line(sim) == "Ju-88A4 (Bomber) (1 hit)"
+
+
+def test_status_target_switches_to_last_hit(armed):
+    sim = armed
+    sim.hit(sim.player, sim.bandit)
+    sim.hit(sim.player, sim.second)
+    sim.advance(1)
+    assert target_line(sim) == "Bf-109K-4 (Fighter) (1 hit)"
+
+
+def test_status_target_after_kill(armed):
+    sim = armed
+    sim.bandit.life = 80
+    sim.hit(sim.player, sim.bandit)
+    sim.kill(sim.player, sim.bandit)
+    sim.advance(1)
+    assert target_line(sim) == "Ju-88A4 (Bomber) shot down (1 hit)"
+
+
+def test_hits_logged_with_life(armed):
+    sim = armed
+    sim.bandit.life = 90
+    sim.bandit.fuel = 0.5
+    sim.hit(sim.player, sim.bandit)
+    log = list(sim.mock.log.values())
+    assert "LossTracker: hit 1 on Bomber by Mark: life 90 of 100, fuel 0.5" in log
+
+
+def test_status_lists_every_aircraft_hit(sim):
+    sim.player.rounds = 1000
+    third = sim.unit("Fighter 2", type="Bf-109K-4")
+    second = sim.unit("Fighter", type="Bf-109K-4")
+    sim.unit("Untouched", type="Bf-109K-4")
+    sim.start()
+
+    sim.bandit.life = 80
+    sim.hit(sim.player, sim.bandit)
+    sim.advance(1)
+    sim.hit(sim.player, third)
+    sim.advance(1)
+    sim.hit(sim.player, second)
+    sim.fire("S_EVENT_ENGINE_SHUTDOWN", initiator=second)
+    sim.advance(1)
+    sim.hit(sim.player, sim.bandit)  # back on the bomber: it's the current target
+    sim.advance(1)
+    assert damage_lines(sim) == [
+        "> Ju-88A4 (Bomber) [##--------] 20% (2 hits)",
+        "  Bf-109K-4 (Fighter) (1 hit)  ENGINE OUT",   # most recently hit first
+        "  Bf-109K-4 (Fighter 2) (1 hit)",
+    ]
+
+    sim.kill(sim.player, third)
+    sim.advance(1)
+    assert damage_lines(sim)[-1] == "  Bf-109K-4 (Fighter 2) shot down (1 hit)"
+    assert not any("Untouched" in l for l in damage_lines(sim))
+
+
+def test_status_list_marks_each_pilots_own_target(armed):
+    sim = armed
+    other = sim.unit("Spitfire 2", side=BLUE, player="Alex")
+    sim.hit(sim.player, sim.bandit)
+    sim.hit(other, sim.second)
+    sim.advance(1)
+    mine = damage_lines(sim)
+    assert mine == ["> Ju-88A4 (Bomber) (1 hit)", "  Bf-109K-4 (Fighter) (1 hit)"]
+    theirs = [m for m in sim.mock.groupMessages.values() if m.group == other.group.id][-1].text
+    assert "> Bf-109K-4 (Fighter) (1 hit)" in theirs.splitlines()
+
+
+def test_status_has_no_list_before_any_hit(armed):
+    sim = armed
+    sim.advance(1)
+    assert "Aircraft hit:" not in status(sim).text
+
+
+def test_critical_hit_flagged_then_counted(armed):
+    sim = armed
+    sim.bandit.life = 95
+    sim.hit(sim.player, sim.bandit)  # 5%: ordinary
+    sim.bandit.life = 20
+    sim.hit(sim.player, sim.bandit)  # 75% in one hit: critical
+    sim.advance(1)
+    assert target_line(sim) == "Ju-88A4 (Bomber) [########--] 80% (2 hits, 1 critical)  CRITICAL HIT"
+    assert "LossTracker: hit 2 on Bomber by Mark: life 20 of 100, fuel 1 CRITICAL" in list(sim.mock.log.values())
+    sim.advance(sim.config.critical_hit_display_s)
+    assert target_line(sim) == "Ju-88A4 (Bomber) [########--] 80% (2 hits, 1 critical)"
+
+
+def test_critical_threshold(sim):
+    sim.start(LossTrackerConfig(critical_hit_fraction=0.5))
+    sim.bandit.life = 60  # 40%: below the 50% threshold
+    sim.hit(sim.player, sim.bandit)
+    assert sim.tracker.aircraft["Bomber"].crits == 0
+
+
+def test_engine_out_only_in_air(armed):
+    sim = armed
+    sim.hit(sim.player, sim.bandit)
+    sim.fire("S_EVENT_ENGINE_SHUTDOWN", initiator=sim.bandit)
+    sim.advance(1)
+    assert target_line(sim).endswith("  ENGINE OUT")
+
+    sim.hit(sim.player, sim.second)
+    sim.second.in_air = False  # shutting down after landing isn't damage
+    sim.fire("S_EVENT_ENGINE_SHUTDOWN", initiator=sim.second)
+    assert not sim.tracker.aircraft["Fighter"].engineOut
+
+
+def test_breaking_off(armed):
+    sim = armed
+    sim.hit(sim.player, sim.bandit)
+    sim.fire("S_EVENT_AI_ABORT_MISSION", initiator=sim.bandit)
+    sim.advance(1)
+    assert target_line(sim).endswith("  BREAKING OFF")
+
+
+def test_fuel_leak(armed):
+    sim = armed
+    sim.hit(sim.player, sim.bandit)
+    for _ in range(12):  # 1% a second = 60% a minute
+        sim.bandit.fuel -= 0.01
+        sim.advance(1)
+    assert "LEAKING FUEL" in target_line(sim)
+    assert "LossTracker: Bomber: fuel leak" in list(sim.mock.log.values())
+
+
+def test_normal_fuel_burn_is_not_a_leak(armed):
+    sim = armed
+    sim.hit(sim.player, sim.bandit)
+    for _ in range(30):  # 0.02% a second = 1.2% a minute
+        sim.bandit.fuel -= 0.0002
+        sim.advance(1)
+    assert "LEAKING FUEL" not in target_line(sim)
+
+
+def test_losing_height_and_slowing(armed):
+    sim = armed
+    sim.hit(sim.player, sim.bandit)
+    sim.advance(1)
+    assert target_line(sim) == "Ju-88A4 (Bomber) (1 hit)"
+    sim.bandit.vy = -20
+    sim.bandit.speed = 60  # of 100 at the start
+    sim.advance(1)
+    assert target_line(sim).endswith("  LOSING HEIGHT, SLOWING")
+
+
+def test_below_start_altitude_is_losing_height(sim):
+    sim.bandit.point.y = 1500
+    sim.start()
+    sim.hit(sim.player, sim.bandit)
+    sim.bandit.point.y = 900
+    sim.advance(1)
+    assert target_line(sim).endswith("  LOSING HEIGHT")
+
+
+def test_damage_notes_in_loss_message_and_summary(armed):
+    sim = armed
+    sim.bandit.life = 20
+    sim.hit(sim.player, sim.bandit)
+    sim.fire("S_EVENT_ENGINE_SHUTDOWN", initiator=sim.bandit)
+    sim.kill(sim.player, sim.bandit)
+    assert any(m.endswith("credited to Mark (1 hit, 1 critical, engine out)") for m in sim.messages())
+
+    sim.hit(sim.player, sim.second)
+    sim.hit(sim.player, sim.second)
+    sim.shoot(sim.player, 0)  # OUT OF AMMO summary lists the survivor's damage too
+    out = [m for m in sim.splashes() if "OUT OF AMMO" in m][0]
+    assert "Bomber (Ju-88A4): shot down - Mark (1 hit, 1 critical, engine out)" in out
+    assert "Fighter (Bf-109K-4): still active (2 hits)" in out
+
+
+def test_uncredited_loss_keeps_damage_notes(armed):
+    sim = armed
+    sim.hit(sim.player, sim.bandit)
+    sim.advance(sim.config.attribution_timeout_s + 1)
+    sim.crash(sim.bandit)
+    sim.advance()
+    assert any(m.endswith("crashed - no credit (1 hit)") for m in sim.messages())
+
+
+def test_friendly_fire_does_not_change_target(armed):
+    sim = armed
+    wingman = sim.unit("Enemy wingman")
+    sim.hit(sim.player, sim.bandit)
+    sim.hit(wingman, sim.second)
+    sim.advance(1)
+    assert target_line(sim) == "Ju-88A4 (Bomber) (1 hit)"
 
 
 def test_status_disabled(sim):
