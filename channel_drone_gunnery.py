@@ -28,7 +28,7 @@ Install:
 Run:
     python3 channel_drone_gunnery.py
 
-Output (same player start in each; see VARIANTS):
+Output, in missions/ (same player start in each; see VARIANTS):
     channel_drone_gunnery.miz         all three bands
     channel_drone_gunnery_low.miz     low band only
     channel_drone_gunnery_medium.miz  medium band only
@@ -70,7 +70,7 @@ except ImportError as exc:
     ) from exc
 
 
-OUTPUT_DIR = Path(__file__).resolve().parent
+OUTPUT_DIR = Path(__file__).resolve().parent / "missions"
 
 # ---------------------------------------------------------------------------
 # Geographic setup
@@ -455,6 +455,7 @@ def main():
     fighter = find_plane(*FIGHTER_IDS)
     bomber = find_plane(*BOMBER_IDS)
 
+    OUTPUT_DIR.mkdir(exist_ok=True)
     for variant in VARIANTS:
         output = OUTPUT_DIR / variant.filename
         with quiet_dcs_install_lookup():

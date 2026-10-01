@@ -21,8 +21,8 @@ python dcs_maps_to_kmz.py --list      # origin/bounds table per terrain, "(overr
 python dcs_maps_to_kmz.py             # writes dcs_world_maps.kmz
 python dcs_maps_to_kmz.py --output out.kmz --detail-regions other.json --bounds-overrides other.json --no-airports --samples-per-edge 50
 
-python channel_drone_gunnery.py      # writes all thirteen channel_drone_gunnery*.miz variants next to the script
-python install_missions.py           # copies every .miz here into ~/Saved Games/DCS/Missions and the GUI hook into ../Scripts/Hooks (skips if missing; --dest, --no-hook)
+python channel_drone_gunnery.py      # writes all thirteen channel_drone_gunnery*.miz variants into missions/
+python install_missions.py           # copies every .miz in missions/ into ~/Saved Games/DCS/Missions and the GUI hook into ../Scripts/Hooks (skips if missing; --dest, --no-hook)
 
 python -m pytest -q tests                                        # all tests
 python -m pytest -q tests/test_kmz.py::test_detail_regions_inside_terrain

@@ -16,11 +16,11 @@ def missions(tmp_path):
 
 def test_copies_every_miz(missions):
     assert install_missions.main(["--dest", str(missions)]) == 0
-    expected = sorted(p.name for p in install_missions.SOURCE_DIR.glob("*.miz"))
+    expected = sorted(p.name for p in install_missions.MISSIONS_DIR.glob("*.miz"))
     assert expected
     assert sorted(p.name for p in missions.iterdir()) == expected
     for name in expected:
-        assert (missions / name).read_bytes() == (install_missions.SOURCE_DIR / name).read_bytes()
+        assert (missions / name).read_bytes() == (install_missions.MISSIONS_DIR / name).read_bytes()
 
 
 def test_installs_gui_hook(missions):

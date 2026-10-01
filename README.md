@@ -3,9 +3,9 @@
 Small [pydcs](https://github.com/dcs-retribution/pydcs) tools for DCS World:
 
 - **`dcs_maps_to_kmz.py`** exports every DCS terrain to a KMZ for Google Earth. It shows each map's coordinate origin, its bounds, approximate high-detail areas and all airfields.
-- **`channel_drone_gunnery.py`** generates **`channel_drone_gunnery.miz`**, a WWII air-to-air gunnery practice mission on The Channel map, plus low-, medium- and high-altitude-only variants.
+- **`channel_drone_gunnery.py`** generates WWII air-to-air gunnery practice missions on The Channel map into **`missions/`**: **`channel_drone_gunnery.miz`** plus low-, medium- and high-altitude-only and single-target variants.
 
-Both generated files are committed, so you can use them without running any Python.
+The generated files (`dcs_world_maps.kmz` and the missions in `missions/`) are committed, so you can use them without running any Python.
 
 ## Setup
 
@@ -36,7 +36,7 @@ Options: `--output`, `--detail-regions`, `--bounds-overrides`, `--no-airports`, 
 ## Channel drone gunnery mission
 
 ```bash
-python channel_drone_gunnery.py    # write all thirteen mission files
+python channel_drone_gunnery.py    # write all thirteen mission files into missions/
 ```
 
 | File | Target formations |
@@ -70,14 +70,14 @@ A target counts as destroyed when it's shot down, crashes, its pilot ejects, or 
 On the Windows PC with DCS, run:
 
 ```bash
-python install_missions.py    # copies every .miz here into Saved Games\DCS\Missions
+python install_missions.py    # copies every .miz in missions/ into Saved Games\DCS\Missions
 ```
 
 It also installs the loss tracker's window hook into `Saved Games\DCS\Scripts\Hooks`. Restart DCS after the first install; `--no-hook` skips it. It does nothing if the Missions folder doesn't exist. Use `--dest` for a different folder, such as `DCS.openbeta\Missions`.
 
 ### Installing the mission in DCS manually
 
-DCS only runs on Windows. If you generated the file on another computer, copy `channel_drone_gunnery.miz` to the Windows PC first.
+DCS only runs on Windows. If you generated the file on another computer, copy the `.miz` files from `missions/` to the Windows PC first.
 
 1. Find your DCS Saved Games folder:
    - `C:\Users\<you>\Saved Games\DCS\` for current installs
@@ -85,7 +85,7 @@ DCS only runs on Windows. If you generated the file on another computer, copy `c
 
    Type `%USERPROFILE%\Saved Games` into the File Explorer address bar to get there quickly.
 2. Open the `Missions` folder inside it. Create it if it doesn't exist.
-3. Copy `channel_drone_gunnery.miz` (and any variants you want) into that folder.
+3. Copy `missions/channel_drone_gunnery.miz` (and any variants you want) into that folder.
 4. Start DCS and choose **Mission** from the main menu. Browse to the `Missions` folder (it opens in your Saved Games by default), select **channel_drone_gunnery**, and click **OK**.
 5. On the slot screen, pick the **Player Spitfire** slot and fly.
 

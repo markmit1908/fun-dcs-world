@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Copy the generated .miz files next to this script into the DCS Missions folder,
+Copy the generated .miz files in missions/ into the DCS Missions folder,
 and install the loss tracker's GUI hook into the sibling Scripts\\Hooks folder.
 
 Does nothing if the Missions folder doesn't exist (for example on a computer
@@ -20,14 +20,15 @@ import sys
 from pathlib import Path
 
 SOURCE_DIR = Path(__file__).resolve().parent
+MISSIONS_DIR = SOURCE_DIR / "missions"
 DEFAULT_DEST = Path.home() / "Saved Games" / "DCS" / "Missions"
 HOOK = SOURCE_DIR / "loss_tracker" / "LossTrackerGameGUI.lua"
 
 
 def install(dest: Path) -> list[Path]:
-    """Copy every .miz in SOURCE_DIR into dest; return the copied paths."""
+    """Copy every .miz in MISSIONS_DIR into dest; return the copied paths."""
     copied = []
-    for miz in sorted(SOURCE_DIR.glob("*.miz")):
+    for miz in sorted(MISSIONS_DIR.glob("*.miz")):
         target = dest / miz.name
         shutil.copy2(miz, target)
         copied.append(target)
@@ -64,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
 
     copied = install(args.dest)
     if not copied:
-        print(f"No .miz files found in {SOURCE_DIR}.")
+        print(f"No .miz files found in {MISSIONS_DIR}.")
     for path in copied:
         print(f"Copied {path.name} -> {path}")
 
