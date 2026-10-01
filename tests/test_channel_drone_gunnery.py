@@ -53,7 +53,47 @@ def test_variant_files():
         "channel_drone_gunnery_evasive_bf109_average.miz",
         "channel_drone_gunnery_evasive_bf109_good.miz",
         "channel_drone_gunnery_evasive_bf109_excellent.miz",
+        "channel_drone_gunnery_armed_bf109_average.miz",
+        "channel_drone_gunnery_armed_bf109_good.miz",
+        "channel_drone_gunnery_armed_bf109_excellent.miz",
     ]
+
+
+@pytest.mark.parametrize("skill", [Skill.Average, Skill.Good, Skill.Excellent])
+def test_armed_bf109_returns_fire(planes, skill):
+    mission = build(planes, f"channel_drone_gunnery_armed_bf109_{skill.value.lower()}.miz")
+    groups = red_groups(mission)
+    assert len(groups) == 1 and len(groups[0].units) == 1
+    group = groups[0]
+    unit = group.units[0]
+    assert group.name == "Armed Bf-109"
+    assert unit.type == "Bf-109K-4"
+    assert unit.skill == skill
+    assert unit.gun == 100  # guns kept
+    assert unit.pylons == {}
+
+    values, order = options(group)
+    assert values == {
+        task.OptROE.Key: task.OptROE.Values.ReturnFire,
+        task.OptReactOnThreat.Key: task.OptReactOnThreat.Values.EvadeFire,
+        task.OptRTBOnOutOfAmmo.Key: task.OptRTBOnOutOfAmmo.Values.NoWeapon,
+        task.OptRTBOnBingoFuel.Key: False,
+    }
+    assert order[-1] == "OrbitAction"
+    assert group.points[0].alt == int(cdg.LOW_FT * cdg.FT_TO_M)
+    assert mission.sortie_text() == f"Channel Drone Gunnery (Armed Bf-109, {skill.value})"
+    assert "shoot back once you have fired at it" in mission.description_text()
+    assert [g.score for g in mission.goals.goals["offline"]] == [100]
+
+
+def test_all_single_target_missions_start_at_same_position(planes):
+    positions = set()
+    for v in cdg.VARIANTS:
+        if v.evasive:
+            mission = build(planes, v.filename)
+            point = red_groups(mission)[0].points[0].position
+            positions.add((round(point.x, 3), round(point.y, 3)))
+    assert len(positions) == 1
 
 
 @pytest.mark.parametrize("target,type_id", [("ju88", "Ju-88A4"), ("bf109", "Bf-109K-4")])

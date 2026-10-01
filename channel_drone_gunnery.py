@@ -36,6 +36,9 @@ Output (same player start in each; see VARIANTS):
     channel_drone_gunnery_evasive_{ju88,bf109}_{average,good,excellent}.miz
                                       one unarmed target on the low racetrack
                                       that evades when attacked, at that skill
+    channel_drone_gunnery_armed_bf109_{average,good,excellent}.miz
+                                      one armed Bf 109 on the low racetrack
+                                      that evades and returns fire
 """
 
 from __future__ import annotations
@@ -99,14 +102,17 @@ class Variant:
     One generated mission. The player start is the same in every variant.
 
     Either passive formations (a Ju 88 leading two Bf 109s) at the given
-    bands, or a single evasive target: "ju88" or "bf109", unarmed, flying the
-    low-band racetrack and evading when attacked, at the given AI skill.
+    bands, or a single evasive target: "ju88" or "bf109", flying the low-band
+    racetrack and evading when attacked, at the given AI skill. Evasive
+    targets are unarmed unless armed, in which case they keep their guns and
+    return fire once shot at.
     """
 
     filename: str
     bands: Tuple[str, ...] = ()
     evasive: Optional[str] = None
     skill: Skill = Skill.Average
+    armed: bool = False
 
 
 EVASIVE_TARGETS = {"ju88": "Ju-88", "bf109": "Bf-109"}
@@ -124,6 +130,14 @@ VARIANTS = [
         skill=skill,
     )
     for target in EVASIVE_TARGETS
+    for skill in EVASIVE_SKILLS
+] + [
+    Variant(
+        f"channel_drone_gunnery_armed_bf109_{skill.value.lower()}.miz",
+        evasive="bf109",
+        skill=skill,
+        armed=True,
+    )
     for skill in EVASIVE_SKILLS
 ]
 
@@ -248,16 +262,18 @@ def make_drone(group):
     disarm(group)
 
 
-def make_evasive(group, skill: Skill):
+def make_evasive(group, skill: Skill, armed: bool = False):
     """
-    Make an unarmed AI aircraft that evades when attacked but stays in the
-    area: Evade Fire (defensive manoeuvres, no abort-mission escape), and no
-    return to base for being out of ammo or low on fuel, which an unarmed AI
-    would otherwise do straight away. Options go on the first route point,
-    before the orbit task.
+    Make an AI aircraft that evades when attacked but stays in the area:
+    Evade Fire (defensive manoeuvres, no abort-mission escape), and no return
+    to base for being out of ammo or low on fuel, which an unarmed AI would
+    otherwise do straight away. Unarmed targets hold fire and are disarmed;
+    armed ones keep their guns and Return Fire (shoot only once shot at).
+    Options go on the first route point, before the orbit task.
     """
     first = group.points[0]
-    first.tasks.append(task.OptROE(task.OptROE.Values.WeaponHold))
+    roe = task.OptROE.Values.ReturnFire if armed else task.OptROE.Values.WeaponHold
+    first.tasks.append(task.OptROE(roe))
     first.tasks.append(
         task.OptReactOnThreat(task.OptReactOnThreat.Values.EvadeFire)
     )
@@ -265,7 +281,11 @@ def make_evasive(group, skill: Skill):
         task.OptRTBOnOutOfAmmo(task.OptRTBOnOutOfAmmo.Values.NoWeapon)
     )
     first.tasks.append(task.OptRTBOnBingoFuel(False))
-    disarm(group, skill)
+    if armed:
+        for unit in group.units:
+            unit.skill = skill
+    else:
+        disarm(group, skill)
 
 
 def configure_racetrack(group, start: Point, end: Point, altitude_m: int):
@@ -369,8 +389,9 @@ def create_evasive_target(
     altitude_ft: int,
     start: Point,
     end: Point,
+    armed: bool = False,
 ):
-    """A single unarmed target flying the racetrack alone and evading when attacked."""
+    """A single target flying the racetrack alone and evading when attacked (see make_evasive)."""
     altitude_m = int(altitude_ft * FT_TO_M)
     group = mission.flight_group_inflight(
         germany,
@@ -382,7 +403,7 @@ def create_evasive_target(
         maintask=task.Nothing,
         group_size=1,
     )
-    make_evasive(group, skill)
+    make_evasive(group, skill, armed)
     # The type's own radio frequency, not the pydcs 251 MHz default (see create_player).
     group.set_frequency(plane_type.radio_frequency)
     configure_racetrack(group, start, end, altitude_m)
@@ -455,8 +476,9 @@ def main():
 def describe(variant: Variant) -> str:
     """Short description for the console."""
     if variant.evasive:
+        kind = "armed" if variant.armed else "evasive"
         return (
-            f"evasive {EVASIVE_TARGETS[variant.evasive]}, {variant.skill.value}, "
+            f"{kind} {EVASIVE_TARGETS[variant.evasive]}, {variant.skill.value}, "
             f"{BANDS['LOW']:,} ft"
         )
     return ", ".join(f"{name} {BANDS[name]:,} ft" for name in variant.bands)
@@ -473,6 +495,23 @@ def set_briefing(mission: dcs.Mission, variant: Variant, tracker: LossTrackerCon
         f"{tracker.end_mission_delay_s:.0f} seconds after the last target is "
         "destroyed. Use the F10 radio menu for the current tally."
     )
+
+    if variant.evasive and variant.armed:
+        target = EVASIVE_TARGETS[variant.evasive]
+        mission.set_sortie_text(f"Channel Drone Gunnery (Armed {target}, {variant.skill.value})")
+        mission.set_description_text(
+            "Air-to-air gunnery practice over The Channel.\n\n"
+            f"A single armed {target} flies a racetrack pattern at "
+            f"{BANDS['LOW']:,} ft. It takes evasive action when you attack, "
+            "and it will shoot back once you have fired at it (Return Fire). "
+            "If you are shot down the summary shows MISSION FAILED. "
+            f"AI skill: {variant.skill.value}.\n\n" + scoring
+        )
+        mission.set_description_bluetask_text(
+            f"Intercept the {target} and shoot it down. It evades and returns fire."
+        )
+        mission.set_description_redtask_text("Armed target: evade, and return fire if fired upon.")
+        return
 
     if variant.evasive:
         target = EVASIVE_TARGETS[variant.evasive]
@@ -567,11 +606,12 @@ def build_mission(spitfire, fighter, bomber, variant: Variant) -> dcs.Mission:
             mission,
             germany,
             plane_type,
-            f"Evasive {EVASIVE_TARGETS[variant.evasive]}",
+            f"{'Armed' if variant.armed else 'Evasive'} {EVASIVE_TARGETS[variant.evasive]}",
             variant.skill,
             BANDS["LOW"],
             start,
             end,
+            armed=variant.armed,
         )
     else:
         # Target altitude bands for this variant.
